@@ -1,0 +1,108 @@
+{
+  "minecraft": {
+    "pure_vanilla": {
+      "label": "Pure Vanilla",
+      "description": "Zero mods, straight from Mojang. Paper server for performance.",
+      "egg": "Paper",
+      "memory_mb": 4096,
+      "disk_mb": 10240,
+      "env": {},
+      "tags": ["pure vanilla", "stock", "unmodded", "clean", "paper"]
+    },
+    "optimized": {
+      "label": "Optimized",
+      "description": "Performance mods only (Sodium, Lithium, Starlight). No gameplay changes — looks and plays like vanilla but runs better.",
+      "egg": "Fabric",
+      "memory_mb": 4096,
+      "disk_mb": 15360,
+      "env": {},
+      "server_mods": ["sodium", "lithium", "starlight", "ferritecore", "lazydfu"],
+      "tags": ["vanilla", "optimized", "performance", "smooth", "fabric"]
+    },
+    "qol": {
+      "label": "Quality of Life",
+      "description": "Optimized + minimap, inventory sorting, voice chat. No new content, just convenience.",
+      "egg": "Fabric",
+      "memory_mb": 4096,
+      "disk_mb": 15360,
+      "env": {},
+      "server_mods": ["sodium", "lithium", "starlight", "ferritecore", "xaeros-minimap", "inventory-sorting", "simple-voice-chat"],
+      "tags": ["qol", "quality of life", "enhanced vanilla", "convenience"]
+    },
+    "atm10": {
+      "label": "All The Mods 10",
+      "description": "Kitchen-sink modpack with 400+ mods. Heavy, needs 8GB+ RAM.",
+      "egg": "CurseForge Generic",
+      "memory_mb": 8192,
+      "disk_mb": 40960,
+      "env": {
+        "PROJECT_ID": "929684",
+        "VERSION_ID": "latest",
+        "API_KEY": ""
+      },
+      "tags": ["atm10", "atm", "all the mods", "modded", "heavy", "kitchen sink"]
+    },
+    "create": {
+      "label": "Create Mod",
+      "description": "Create mod + addons. Building, automation, and engineering.",
+      "egg": "CurseForge Generic",
+      "memory_mb": 6144,
+      "disk_mb": 30720,
+      "env": {
+        "PROJECT_ID": "",
+        "VERSION_ID": "latest",
+        "API_KEY": ""
+      },
+      "tags": ["create", "create mod", "engineering", "automation", "modded"]
+    },
+    "forge": {
+      "label": "Forge (Blank)",
+      "description": "Forge modloader with no mods. Add your own mods via Panel file manager.",
+      "egg": "Forge",
+      "memory_mb": 4096,
+      "disk_mb": 20480,
+      "env": {},
+      "tags": ["forge", "blank", "custom", "modded"]
+    },
+    "fabric": {
+      "label": "Fabric (Blank)",
+      "description": "Fabric modloader with no mods. Add your own mods via Panel file manager.",
+      "egg": "Fabric",
+      "memory_mb": 4096,
+      "disk_mb": 20480,
+      "env": {},
+      "tags": ["fabric", "blank", "custom", "modded"]
+    }
+  },
+  "valheim": {
+    "vanilla": {
+      "label": "Vanilla Valheim",
+      "description": "Stock Valheim dedicated server. No mods.",
+      "egg": "Valheim",
+      "memory_mb": 4096,
+      "disk_mb": 10240,
+      "env": {},
+      "tags": ["vanilla", "stock", "unmodded"]
+    },
+    "plus": {
+      "label": "Valheim Plus",
+      "description": "QoL mod — stamina tweaks, build improvements, shared map. No new content.",
+      "egg": "Valheim",
+      "memory_mb": 4096,
+      "disk_mb": 10240,
+      "env": {},
+      "tags": ["plus", "valheim plus", "qol", "enhanced", "modded"]
+    }
+  },
+  "palworld": {
+    "vanilla": {
+      "label": "Vanilla Palworld",
+      "description": "Stock Palworld dedicated server.",
+      "egg": "Palworld",
+      "memory_mb": 8192,
+      "disk_mb": 20480,
+      "env": {},
+      "tags": ["vanilla", "stock"]
+    }
+  }
+}

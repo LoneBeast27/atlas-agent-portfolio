@@ -1,0 +1,122 @@
+x-common-keys: &common-keys
+  restart: unless-stopped
+  logging:
+    driver: json-file
+  env_file: '.env'
+
+services:
+
+  jellyfin:
+    <<: *common-keys
+    container_name: jellyfin
+    runtime: nvidia
+    environment:
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NVIDIA_VISIBLE_DEVICES=all
+      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
+    image: ghcr.io/hotio/jellyfin:latest
+    ports:
+      - 8096:8096
+    volumes:
+      - ./data/jellyfin:/config
+      - ./data/media:/data/media:ro
+      - /usr/lib/wsl/lib:/usr/lib/wsl/lib:ro
+    tmpfs:
+      - /transcode:size=6G,mode=1777
+      - /cache:size=4G,mode=1777
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:8096/health || exit 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    networks:
+      - web_proxy
+      - default
+
+  navidrome:
+    <<: *common-keys
+    container_name: navidrome
+    image: deluan/navidrome:latest
+    ports:
+      - 4533:4533
+    environment:
+      - ND_SCANSCHEDULE=1h
+      - ND_LOGLEVEL=info
+      - ND_SESSIONTIMEOUT=24h
+      - ND_DATAFOLDER=/config
+      - ND_MUSICFOLDER=/music
+      - ND_CACHEFOLDER=/cache
+      - ND_ENABLETRANSCODINGCONFIG=true
+      - ND_TRANSCODINGCACHESIZE=4000M
+    volumes:
+      - ./data/navidrome:/config
+      - ./data/media/music:/music:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --spider --quiet http://localhost:4533/ping || exit 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - web_proxy
+      - default
+
+  feishin:
+    <<: *common-keys
+    image: ghcr.io/jeffvli/feishin:latest
+    container_name: feishin
+    ports:
+      - 9180:9180
+    environment:
+      - SERVER_NAME=Jellyfin
+      - SERVER_TYPE=jellyfin
+      - SERVER_URL=https://jellyfin.lonebeast.net
+      - SERVER_LOCK=true
+    volumes:
+      - ./data/feishin:/var/lib/feishin
+    networks:
+      - web_proxy
+      - default
+
+  beets:
+    <<: *common-keys
+    image: lscr.io/linuxserver/beets:latest
+    container_name: beets
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Kolkata
+    volumes:
+      - ./data/beets:/config
+      - ./data/media:/data
+    networks:
+      - web_proxy
+      - default
+
+  jfa-go:
+    <<: *common-keys
+    image: hrfee/jfa-go
+    container_name: jfa-go
+    environment:
+      - TZ=Asia/Kolkata
+    volumes:
+      - ./data/jfa-go:/data
+    ports:
+      - 8056:8056
+    networks:
+      - web_proxy
+      - default
+
+networks:
+  web_proxy:
+    external: true

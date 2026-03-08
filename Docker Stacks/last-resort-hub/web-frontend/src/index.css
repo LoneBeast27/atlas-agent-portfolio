@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", system-ui, sans-serif;
+  --color-background: #0a0a0f;
+  --color-surface-1: #12121a;
+  --color-surface-2: #1e1e2a;
+  --color-surface-3: #2a2a3a;
+  --color-primary: #6366f1;
+  --color-primary-hover: #4f46e5;
+  --color-danger: #ef4444;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-text-main: #e2e8f0;
+  --color-text-muted: #94a3b8;
+}
+
+/* Resolution-agnostic scaling */
+html {
+  font-size: clamp(13px, 0.9vw + 4px, 16px);
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-text-main);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  margin: 0;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Glass panel */
+@layer utilities {
+  .glass-panel {
+    @apply bg-surface-1/80 backdrop-blur-md border border-surface-2 rounded-2xl shadow-xl transition-all duration-300;
+  }
+  .glass-panel:hover {
+    @apply border-surface-3 shadow-2xl;
+  }
+}
+
+/* react-grid-layout */
+.react-grid-layout { position: relative; }
+.react-grid-item { transition: transform 150ms ease, width 150ms ease, height 150ms ease; }
+.react-grid-item.react-draggable-dragging { transition: none; z-index: 100; opacity: 0.9; }
+.react-grid-item.resizing { transition: none; }
+.react-grid-placeholder {
+  background: var(--color-primary) !important;
+  opacity: 0.15 !important;
+  border-radius: 1rem;
+}
+
+/* Drag handle — always in DOM, only active in edit mode */
+.widget-drag-handle {
+  display: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 28px;
+  cursor: grab;
+  z-index: 10;
+  border-radius: 1rem 1rem 0 0;
+  background: linear-gradient(180deg, rgba(99,102,241,0.12) 0%, transparent 100%);
+}
+.widget-drag-handle:active { cursor: grabbing; }
+
+/* Edit mode — show handles and outlines */
+.grid-editing .widget-drag-handle { display: block; }
+.grid-editing .react-grid-item { outline: 1px solid rgba(99,102,241,0.2); border-radius: 1rem; }
+.grid-editing .react-resizable-handle { opacity: 0; transition: opacity 200ms; }
+.grid-editing .react-grid-item:hover .react-resizable-handle { opacity: 0.5; }
+
+/* Locked mode — hide all interaction affordances */
+.grid-locked .react-resizable-handle { display: none !important; }
+.grid-locked .react-grid-item { cursor: default; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }

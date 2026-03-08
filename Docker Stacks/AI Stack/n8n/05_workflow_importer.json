@@ -1,0 +1,105 @@
+{
+    "name": "05_workflow_importer",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "import-workflow",
+                "options": {}
+            },
+            "id": "webhook_trigger",
+            "name": "Import Webhook",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [
+                380,
+                240
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "http://localhost:5678/api/v1/workflows",
+                "sendBody": true,
+                "contentType": "json",
+                "bodyParameters": {
+                    "parameters": [
+                        {
+                            "name": "name",
+                            "value": "={{ $json.body.name }}"
+                        },
+                        {
+                            "name": "nodes",
+                            "value": "={{ $json.body.nodes }}"
+                        },
+                        {
+                            "name": "connections",
+                            "value": "={{ $json.body.connections }}"
+                        }
+                    ]
+                },
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "X-N8N-API-KEY",
+                            "value": "YOUR_API_KEY_HERE"
+                        }
+                    ]
+                }
+            },
+            "id": "n8n_api_import",
+            "name": "Import to n8n",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.1,
+            "position": [
+                600,
+                240
+            ]
+        },
+        {
+            "parameters": {
+                "values": {
+                    "string": [
+                        {
+                            "name": "text",
+                            "value": "=✅ **Workflow Created**\nName: {{ $json.name }}\nID: {{ $json.id }}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "format_response",
+            "name": "Format Response",
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 2,
+            "position": [
+                820,
+                240
+            ]
+        }
+    ],
+    "connections": {
+        "Import Webhook": {
+            "main": [
+                [
+                    {
+                        "node": "Import to n8n",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Import to n8n": {
+            "main": [
+                [
+                    {
+                        "node": "Format Response",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    }
+}

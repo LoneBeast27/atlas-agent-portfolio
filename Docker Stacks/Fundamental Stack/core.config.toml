@@ -1,0 +1,15 @@
+# Komodo Core Configuration
+
+# Enable local username/password login
+local_auth = true
+
+# Disable OIDC
+oidc_enabled = false
+
+# Allow registration (set to true for first user, then change to false)
+disable_user_registration = false
+
+# Database Connection (Matches docker-compose service name 'mongo')
+[database]
+address = "mongo:27017"
+use_ssl = false

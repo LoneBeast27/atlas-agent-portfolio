@@ -1,0 +1,236 @@
+{
+    "name": "07_rag_ingestion_pipeline",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "rag-ingest",
+                "responseMode": "lastNode",
+                "options": {}
+            },
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [
+                0,
+                0
+            ],
+            "id": "trigger-webhook",
+            "name": "Webhook Trigger"
+        },
+        {
+            "parameters": {
+                "dataType": "string",
+                "value1": "={{ $json.body.url }}",
+                "rules": {
+                    "rules": [
+                        {
+                            "value2": "regex:^https?://",
+                            "operation": "regex"
+                        }
+                    ]
+                }
+            },
+            "type": "n8n-nodes-base.switch",
+            "typeVersion": 3,
+            "position": [
+                200,
+                0
+            ],
+            "id": "switch-url-vs-file",
+            "name": "URL vs Binary"
+        },
+        {
+            "parameters": {
+                "url": "={{ $json.body.url }}",
+                "options": {}
+            },
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                400,
+                -100
+            ],
+            "id": "fetch-website",
+            "name": "HTTP Request"
+        },
+        {
+            "parameters": {
+                "operation": "extractHtmlContent",
+                "extractionValues": {
+                    "values": [
+                        {
+                            "key": "text",
+                            "cssSelector": "body",
+                            "returnValue": "text"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.html",
+            "typeVersion": 1.2,
+            "position": [
+                600,
+                -100
+            ],
+            "id": "extract-html",
+            "name": "HTML Extract"
+        },
+        {
+            "parameters": {
+                "options": {}
+            },
+            "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+            "typeVersion": 1,
+            "position": [
+                800,
+                0
+            ],
+            "id": "default-data-loader",
+            "name": "Default Data Loader"
+        },
+        {
+            "parameters": {
+                "chunkSize": 1000,
+                "chunkOverlap": 100
+            },
+            "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+            "typeVersion": 1,
+            "position": [
+                1000,
+                150
+            ],
+            "id": "recursive-character-text-splitter",
+            "name": "Recursive Character Text Splitter"
+        },
+        {
+            "parameters": {
+                "model": "nomic-embed-text:latest"
+            },
+            "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
+            "typeVersion": 1,
+            "position": [
+                1000,
+                300
+            ],
+            "id": "ollama-embeddings",
+            "name": "Ollama Embeddings",
+            "credentials": {
+                "ollamaApi": {
+                    "id": "ollama-local",
+                    "name": "Local Ollama"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "mode": "insert",
+                "qdrantCollection": "atlas_memory",
+                "options": {}
+            },
+            "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+            "typeVersion": 1,
+            "position": [
+                1000,
+                0
+            ],
+            "id": "qdrant-vector-store",
+            "name": "Qdrant Vector Store",
+            "credentials": {
+                "qdrantApi": {
+                    "id": "qdrant-local",
+                    "name": "Local Qdrant"
+                }
+            }
+        }
+    ],
+    "connections": {
+        "Webhook Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "URL vs Binary",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "URL vs Binary": {
+            "main": [
+                [
+                    {
+                        "node": "HTTP Request",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Default Data Loader",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "HTTP Request": {
+            "main": [
+                [
+                    {
+                        "node": "HTML Extract",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "HTML Extract": {
+            "main": [
+                [
+                    {
+                        "node": "Default Data Loader",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Default Data Loader": {
+            "main": [
+                [
+                    {
+                        "node": "Qdrant Vector Store",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Recursive Character Text Splitter": {
+            "ai_textSplitter": [
+                [
+                    {
+                        "node": "Default Data Loader",
+                        "type": "ai_textSplitter",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Ollama Embeddings": {
+            "ai_embedding": [
+                [
+                    {
+                        "node": "Qdrant Vector Store",
+                        "type": "ai_embedding",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    }
+}

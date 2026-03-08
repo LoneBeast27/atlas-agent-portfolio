@@ -1,0 +1,56 @@
+{
+    "name": "09_minecraft_deployer",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "deploy-minecraft",
+                "responseMode": "lastNode",
+                "options": {}
+            },
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [
+                0,
+                0
+            ],
+            "id": "trigger-webhook",
+            "name": "Webhook Trigger"
+        },
+        {
+            "parameters": {
+                "command": "=cd '{{ $json.body.stack_path }}' && docker compose up -d"
+            },
+            "type": "n8n-nodes-base.ssh",
+            "typeVersion": 1,
+            "position": [
+                250,
+                0
+            ],
+            "id": "ssh-deploy",
+            "name": "Deploy Minecraft via SSH",
+            "credentials": {
+                "sshPrivatekeyApi": {
+                    "id": "ssh-host-key",
+                    "name": "Host SSH"
+                }
+            }
+        }
+    ],
+    "connections": {
+        "Webhook Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Deploy Minecraft via SSH",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    }
+}

@@ -1,0 +1,70 @@
+x-common-keys: &common-keys
+  restart: unless-stopped
+  logging:
+    driver: json-file
+
+services:
+  stdb:
+    <<: *common-keys
+    image: clockworklabs/spacetime:latest
+    container_name: stdb_backend
+    ports:
+      - "3004:3000"
+    volumes:
+      - ./stdb_data:/home/spacetime/.local/share/spacetime
+    command: start
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/identity || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - web_proxy
+      - default
+
+  gateway:
+    <<: *common-keys
+    build:
+      context: ./api-gateway
+    container_name: lrh_gateway
+    ports:
+      - "3006:3005"
+    env_file: .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - stdb
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:3005/').then(r => process.exit(r.ok ? 0 : 1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - web_proxy
+      - default
+
+  dashboard:
+    <<: *common-keys
+    build:
+      context: ./web-frontend
+    container_name: lrh_dashboard
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./web-frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_GATEWAY_URL=http://localhost:3006
+      - VITE_STDB_URI=ws://localhost:3004
+    depends_on:
+      - gateway
+    networks:
+      - web_proxy
+      - default
+
+networks:
+  web_proxy:
+    external: true
+  default:
+    driver: bridge

@@ -1,0 +1,43 @@
+x-common-keys: &common-keys
+  restart: unless-stopped
+  logging:
+    driver: json-file
+
+services:
+  mc:
+    <<: *common-keys
+    container_name: minecraft-server
+    image: itzg/minecraft-server:java21
+    ports:
+      - 25565:25565
+    stdin_open: true
+    tty: true
+    environment:
+      EULA: "TRUE"
+      TYPE: AUTO_CURSEFORGE
+      CF_SLUG: all-the-mods-10
+      CF_API_KEY: "$$2a$$10$$UONaq105tBTyJZCW13y3WOJPKbCz8l8jbXCF2.0JGlv6OGLGwBXCy"
+      MEMORY: 16G
+      VIEW_DISTANCE: 8
+      MAX_TICK_TIME: "60000"
+      ENABLE_ROLLING_LOGS: "TRUE"
+      CRON_BACKUP: "0 4 * * *"
+      JVM_OPTS: >-
+        -XX:+UseG1GC
+        -XX:+UnlockExperimentalVMOptions
+        -XX:G1NewSizePercent=20
+        -XX:G1ReservePercent=20
+        -XX:MaxGCPauseMillis=50
+        -XX:G1HeapRegionSize=32M
+    volumes:
+      - "c:/Docker Speed Drive/Docker Stacks/Minecraft Stack/data:/data"
+    healthcheck:
+      test: mc-health
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    deploy:
+      resources:
+        limits:
+          memory: 20G

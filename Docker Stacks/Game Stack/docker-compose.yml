@@ -1,0 +1,148 @@
+x-common-keys: &common-keys
+  restart: unless-stopped
+  logging:
+    driver: json-file
+
+services:
+  # ── Database ──────────────────────────────────────
+  db:
+    <<: *common-keys
+    container_name: pterodactyl-db
+    image: mariadb:10.11
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: panel
+      MYSQL_USER: pterodactyl
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - ./data/mariadb:/var/lib/mysql
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ── Cache ─────────────────────────────────────────
+  cache:
+    <<: *common-keys
+    container_name: pterodactyl-cache
+    image: redis:7-alpine
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ── Panel (Web UI + REST API) ─────────────────────
+  panel:
+    <<: *common-keys
+    container_name: pterodactyl-panel
+    image: ghcr.io/pterodactyl/panel:latest
+    ports:
+      - "8880:80"
+      - "8443:443"
+    environment:
+      APP_URL: https://games.lonebeast.net
+      APP_TIMEZONE: ${TZ:-UTC}
+      APP_SERVICE_AUTHOR: ${ADMIN_EMAIL}
+      APP_ENV: production
+      APP_DEBUG: "false"
+
+      # Database
+      DB_HOST: pterodactyl-db
+      DB_PORT: "3306"
+      DB_DATABASE: panel
+      DB_USERNAME: pterodactyl
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+
+      # Cache & Sessions
+      CACHE_DRIVER: redis
+      SESSION_DRIVER: redis
+      QUEUE_CONNECTION: redis
+      REDIS_HOST: pterodactyl-cache
+      REDIS_PORT: "6379"
+
+      # Mail (optional, can configure later)
+      MAIL_DRIVER: log
+
+      # Trust reverse proxy
+      TRUSTED_PROXIES: "*"
+    volumes:
+      - ./data/panel/var:/app/var
+      - ./data/panel/nginx:/etc/nginx/http.d
+      - ./data/panel/logs:/app/storage/logs
+    networks:
+      - default
+      - web_proxy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:80/ -o /dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ── Wings (Game Server Daemon) ────────────────────
+  wings:
+    <<: *common-keys
+    container_name: pterodactyl-wings
+    image: ghcr.io/pterodactyl/wings:latest
+    ports:
+      - "8445:443"
+      - "2022:2022"
+      # Game server ports are NOT mapped here — Wings creates game server
+      # containers as Docker siblings (via shared socket) that bind their
+      # own ports directly to the host. Mapping them here would conflict.
+    privileged: true
+    tty: true
+    environment:
+      TZ: ${TZ:-UTC}
+      WINGS_UID: 988
+      WINGS_GID: 988
+      WINGS_USERNAME: pterodactyl
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/containers:/var/lib/docker/containers
+      - ./data/wings/config:/etc/pterodactyl
+      - ./data/wings/logs:/var/log/pterodactyl
+      # Path mirroring: this path must match inside Wings AND on the Docker host
+      # On WSL2, this resolves inside the WSL2 ext4 vdisk
+      - /var/lib/pterodactyl:/var/lib/pterodactyl
+      - /tmp/pterodactyl:/tmp/pterodactyl
+    networks:
+      - default
+      - wings_net
+    depends_on:
+      - panel
+
+networks:
+  default:
+    driver: bridge
+  web_proxy:
+    external: true
+  wings_net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: wings0

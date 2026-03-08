@@ -1,0 +1,145 @@
+{
+    "id": "gpu_monitor_03",
+    "name": "03_gpu_monitor",
+    "nodes": [
+        {
+            "parameters": {
+                "path": "system-state",
+                "responseMode": "lastNode",
+                "options": {}
+            },
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [
+                0,
+                0
+            ],
+            "id": "webhook-trigger",
+            "name": "Webhook"
+        },
+        {
+            "parameters": {
+                "command": "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits"
+            },
+            "type": "n8n-nodes-base.ssh",
+            "typeVersion": 1,
+            "position": [
+                250,
+                0
+            ],
+            "id": "ssh-check-gpu",
+            "name": "Check GPU",
+            "credentials": {
+                "sshPrivatekeyApi": {
+                    "id": "ssh-host-key",
+                    "name": "Host SSH"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "number": [
+                        {
+                            "value1": "={{ parseInt($json.stdout) }}",
+                            "operation": "larger",
+                            "value2": 80
+                        }
+                    ]
+                }
+            },
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                500,
+                0
+            ],
+            "id": "check-threshold",
+            "name": "High Load?"
+        },
+        {
+            "parameters": {
+                "values": {
+                    "string": [
+                        {
+                            "name": "SYSTEM_STATE",
+                            "value": "TASK_MODE"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 2,
+            "position": [
+                750,
+                -100
+            ],
+            "id": "set-task-mode",
+            "name": "Set Task Mode"
+        },
+        {
+            "parameters": {
+                "values": {
+                    "string": [
+                        {
+                            "name": "SYSTEM_STATE",
+                            "value": "IDLE"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 2,
+            "position": [
+                750,
+                100
+            ],
+            "id": "set-idle",
+            "name": "Set Idle"
+        }
+    ],
+    "connections": {
+        "Webhook": {
+            "main": [
+                [
+                    {
+                        "node": "Check GPU",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Check GPU": {
+            "main": [
+                [
+                    {
+                        "node": "High Load?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "High Load?": {
+            "main": [
+                [
+                    {
+                        "node": "Set Task Mode",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Set Idle",
+                        "type": "main",
+                        "index": 1
+                    }
+                ]
+            ]
+        }
+    }
+}

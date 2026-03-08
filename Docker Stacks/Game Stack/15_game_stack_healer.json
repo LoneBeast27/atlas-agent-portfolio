@@ -1,0 +1,804 @@
+{
+  "updatedAt": "2026-03-08T17:36:25.828Z",
+  "createdAt": "2026-03-08T16:16:06.450Z",
+  "id": "EbhS42WlJWliP04q",
+  "name": "15_game_stack_healer",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 2
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every 2 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "game-stack-alert",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Uptime Kuma Alert",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        550
+      ],
+      "webhookId": "game-stack-alert-001"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pterodactyl Game Stack Health Check\n// Checks all infrastructure containers + game servers via Docker socket\n\nconst http = require('http');\n\nfunction dockerGet(path) {\n  return new Promise((resolve, reject) => {\n    const opts = { socketPath: '/var/run/docker.sock', path, method: 'GET' };\n    const req = http.request(opts, (res) => {\n      let data = '';\n      res.on('data', chunk => data += chunk);\n      res.on('end', () => { try { resolve(JSON.parse(data)); } catch(e) { resolve(data); } });\n    });\n    req.on('error', reject);\n    req.end();\n  });\n}\n\nconst containers = await dockerGet('/containers/json?all=true');\n\n// Infrastructure containers\nconst infra = ['pterodactyl-db', 'pterodactyl-cache', 'pterodactyl-panel', 'pterodactyl-wings'];\nconst ptero = {};\n\nfor (const name of infra) {\n  const c = containers.find(c => c.Names.some(n => n === '/' + name));\n  if (c) {\n    ptero[name] = {\n      id: c.Id,\n      state: c.State,\n      status: c.Status,\n      healthy: c.State === 'running' && !c.Status.includes('unhealthy')\n    };\n  } else {\n    ptero[name] = { id: null, state: 'missing', status: 'not found', healthy: false };\n  }\n}\n\n// Game server containers (on pterodactyl_nw network, not infra)\nconst gameServers = containers.filter(c => {\n  const nets = c.NetworkSettings && c.NetworkSettings.Networks;\n  const onPteroNet = nets && nets.pterodactyl_nw;\n  const isInfra = infra.some(name => c.Names.includes('/' + name));\n  return onPteroNet && !isInfra;\n});\n\nconst gsStatus = gameServers.map(c => ({\n  id: c.Id,\n  name: c.Names[0].replace('/', ''),\n  state: c.State,\n  status: c.Status\n}));\n\nreturn [{ json: { ptero, gameServers: gsStatus, timestamp: new Date().toISOString() } }];\n"
+      },
+      "id": "health-check",
+      "name": "Pterodactyl Health Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Classify failures by priority and type\nconst { ptero, gameServers } = $json;\nconst issues = [];\n\n// Check dependency order: DB -> Cache -> Panel -> Wings\nif (!ptero['pterodactyl-db'].healthy) {\n  issues.push({ type: 'db_down', container: 'pterodactyl-db', containerId: ptero['pterodactyl-db'].id, severity: 'critical' });\n}\nif (!ptero['pterodactyl-cache'].healthy) {\n  issues.push({ type: 'cache_down', container: 'pterodactyl-cache', containerId: ptero['pterodactyl-cache'].id, severity: 'high' });\n}\nif (!ptero['pterodactyl-panel'].healthy) {\n  issues.push({ type: 'panel_down', container: 'pterodactyl-panel', containerId: ptero['pterodactyl-panel'].id, severity: 'high' });\n}\nif (!ptero['pterodactyl-wings'].healthy) {\n  issues.push({ type: 'wings_down', container: 'pterodactyl-wings', containerId: ptero['pterodactyl-wings'].id, severity: 'critical' });\n}\n\n// Dead game servers\nconst deadGS = gameServers.filter(gs => gs.state !== 'running');\nfor (const gs of deadGS) {\n  issues.push({ type: 'game_server_down', container: gs.name, containerId: gs.id, severity: 'high' });\n}\n\n// Wings stuck detection: check via Pterodactyl API\nif (ptero['pterodactyl-wings'].healthy) {\n  try {\n    const panelUrl = 'http://pterodactyl-panel:80';\n    const clientKey = 'h9xX34wBLNWuIna0Z71P1XrZowPOsXvyoPWKEHDx2LpjMmbM7IPg7tdmG5hQQkX4';\n    const hdrs = { 'Authorization': 'Bearer ' + clientKey, 'Accept': 'application/json' };\n    const data = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client', headers: hdrs, json: true });\n    const servers = data.data || [];\n    const staticData = $getWorkflowStaticData('global');\n    if (!staticData.stuckServers) staticData.stuckServers = {};\n    const now = Date.now();\n\n    for (const srv of servers) {\n      const id = srv.attributes.identifier;\n      try {\n        const resData = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client/servers/' + id + '/resources', headers: hdrs, json: true });\n        const state = resData.attributes.current_state;\n        if (state === 'starting' || state === 'stopping') {\n          if (!staticData.stuckServers[id]) {\n            staticData.stuckServers[id] = now;\n          } else if (now - staticData.stuckServers[id] > 5 * 60 * 1000) {\n            issues.push({ type: 'wings_stuck', container: 'pterodactyl-wings', containerId: ptero['pterodactyl-wings'].id, severity: 'critical', stuckServer: id, stuckState: state });\n          }\n        } else {\n          delete staticData.stuckServers[id];\n        }\n      } catch(e) {}\n    }\n  } catch(e) {}\n}\n\nif (issues.length === 0) {\n  return [{ json: { healthy: true, issues: [], timestamp: new Date().toISOString() } }];\n}\n\nreturn [{ json: { healthy: false, issues, timestamp: new Date().toISOString() } }];"
+      },
+      "id": "classify",
+      "name": "Classify Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        750,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "has-issues",
+              "leftValue": "={{ $json.healthy }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "any-issues",
+      "name": "Any Issues?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Unified Issue Handler: routes + executes recovery for all issue types\nconst http = require('http');\nconst issues = $json.issues || [];\nconst results = [];\n\nfunction dockerPost(path) {\n  return new Promise((resolve, reject) => {\n    const opts = { socketPath: '/var/run/docker.sock', path, method: 'POST' };\n    const req = http.request(opts, (res) => {\n      let data = '';\n      res.on('data', chunk => data += chunk);\n      res.on('end', () => resolve({ status: res.statusCode, body: data }));\n    });\n    req.on('error', reject);\n    req.end();\n  });\n}\n\nfunction dockerGet(path) {\n  return new Promise((resolve, reject) => {\n    const opts = { socketPath: '/var/run/docker.sock', path, method: 'GET' };\n    const req = http.request(opts, (res) => {\n      let data = '';\n      res.on('data', chunk => data += chunk);\n      res.on('end', () => { try { resolve(JSON.parse(data)); } catch(e) { resolve(data); } });\n    });\n    req.on('error', reject);\n    req.end();\n  });\n}\n\nconst panelUrl = 'http://pterodactyl-panel:80';\nconst clientKey = 'h9xX34wBLNWuIna0Z71P1XrZowPOsXvyoPWKEHDx2LpjMmbM7IPg7tdmG5hQQkX4';\nconst hdrs = { 'Authorization': 'Bearer ' + clientKey, 'Accept': 'application/json', 'Content-Type': 'application/json' };\n\nfor (const issue of issues) {\n  const { type, container, containerId } = issue;\n\n  // === Handler A: DB/Cache restart ===\n  if (type === 'db_down' || type === 'cache_down') {\n    let success = false;\n    for (let attempt = 1; attempt <= 2; attempt++) {\n      try {\n        const result = await dockerPost('/containers/' + containerId + '/restart?t=30');\n        if (result.status === 204) {\n          await new Promise(r => setTimeout(r, 15000));\n          success = true;\n          break;\n        }\n      } catch(e) {}\n    }\n    results.push({ handler: 'support_restart', container, action: 'restart', result: success ? 'success' : 'failed', timestamp: new Date().toISOString() });\n  }\n\n  // === Handler B: Panel restart ===\n  else if (type === 'panel_down') {\n    let success = false;\n    try {\n      const result = await dockerPost('/containers/' + containerId + '/restart?t=30');\n      if (result.status === 204) {\n        await new Promise(r => setTimeout(r, 15000));\n        success = true;\n      }\n    } catch(e) {}\n    results.push({ handler: 'panel_restart', container, action: 'restart', result: success ? 'success' : 'failed', timestamp: new Date().toISOString() });\n  }\n\n  // === Handler C: Graceful Wings Recovery ===\n  else if (type === 'wings_down' || type === 'wings_stuck') {\n    const log = [];\n    let runningServers = [];\n\n    // Step 1: Get running servers from Panel\n    try {\n      const data = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client', headers: hdrs, json: true });\n      const servers = data.data || [];\n      for (const srv of servers) {\n        const id = srv.attributes.identifier;\n        try {\n          const resData = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client/servers/' + id + '/resources', headers: hdrs, json: true });\n          if (resData.attributes.current_state === 'running') {\n            runningServers.push(id);\n          }\n        } catch(e) {}\n      }\n      log.push('Found ' + runningServers.length + ' running server(s)');\n\n      // Step 2: Gracefully stop each\n      for (const id of runningServers) {\n        try {\n          await this.helpers.httpRequest({ method: 'POST', url: panelUrl + '/api/client/servers/' + id + '/power', headers: hdrs, body: { signal: 'stop' } });\n          log.push('Sent stop to ' + id);\n        } catch(e) {\n          log.push('Failed to stop ' + id + ': ' + e.message);\n        }\n      }\n      if (runningServers.length > 0) {\n        await new Promise(r => setTimeout(r, 30000));\n        log.push('Waited 30s for graceful shutdown');\n      }\n    } catch(e) {\n      log.push('Panel unreachable, skipping graceful stop: ' + e.message);\n    }\n\n    // Step 3: Restart Wings\n    try {\n      const containers = await dockerGet('/containers/json?all=true');\n      const wings = containers.find(c => c.Names.some(n => n === '/pterodactyl-wings'));\n      if (wings) {\n        const result = await dockerPost('/containers/' + wings.Id + '/restart?t=60');\n        log.push('Wings restart: ' + (result.status === 204 ? 'success' : 'failed (' + result.status + ')'));\n        await new Promise(r => setTimeout(r, 15000));\n        log.push('Waited 15s for Wings init');\n\n        // Step 4: Re-start servers\n        for (const id of runningServers) {\n          try {\n            await this.helpers.httpRequest({ method: 'POST', url: panelUrl + '/api/client/servers/' + id + '/power', headers: hdrs, body: { signal: 'start' } });\n            log.push('Sent start to ' + id);\n          } catch(e) {\n            log.push('Failed to start ' + id + ': ' + e.message);\n          }\n        }\n      } else {\n        log.push('Wings container not found!');\n      }\n    } catch(e) {\n      log.push('Wings restart error: ' + e.message);\n    }\n\n    results.push({ handler: 'wings_recovery', container, action: 'graceful_recovery', serversRestarted: runningServers, log, result: log.some(l => l.includes('success')) ? 'success' : 'partial', timestamp: new Date().toISOString() });\n  }\n\n  // === Handler D: Game Server Recovery ===\n  else if (type === 'game_server_down') {\n    const staticData = $getWorkflowStaticData('global');\n    if (!staticData.crashHistory) staticData.crashHistory = {};\n    const now = Date.now();\n    const ONE_HOUR = 60 * 60 * 1000;\n\n    if (!staticData.crashHistory[container]) {\n      staticData.crashHistory[container] = { lastCrash: 0, crashCount: 0, cooldownUntil: 0, state: 'healthy' };\n    }\n    const record = staticData.crashHistory[container];\n\n    if (now - record.lastCrash > ONE_HOUR && record.state !== 'crash_loop') {\n      record.crashCount = 0;\n      record.state = 'healthy';\n    }\n\n    if (record.cooldownUntil > now) {\n      results.push({ handler: 'game_server_recovery', container, action: 'waiting_cooldown', cooldownRemaining: Math.round((record.cooldownUntil - now) / 1000) + 's', crashCount: record.crashCount, state: record.state, timestamp: new Date().toISOString() });\n      continue;\n    }\n\n    if (record.state === 'crash_loop') {\n      results.push({ handler: 'game_server_recovery', container, action: 'crash_loop_detected', crashCount: record.crashCount, state: 'crash_loop', timestamp: new Date().toISOString() });\n      continue;\n    }\n\n    record.lastCrash = now;\n    record.crashCount++;\n    let action = 'restart';\n    let result = 'pending';\n\n    if (record.crashCount >= 3) {\n      record.state = 'crash_loop';\n      action = 'crash_loop_declared';\n      result = 'gave_up';\n    } else if (record.crashCount === 2) {\n      record.cooldownUntil = now + 15 * 60 * 1000;\n      record.state = 'recovering';\n      action = 'cooldown_15min';\n      result = 'scheduled';\n    } else {\n      record.cooldownUntil = now + 5 * 60 * 1000;\n      record.state = 'recovering';\n      action = 'cooldown_5min';\n      result = 'scheduled';\n    }\n\n    results.push({ handler: 'game_server_recovery', container, action, result, crashCount: record.crashCount, state: record.state, timestamp: new Date().toISOString() });\n  }\n}\n\nreturn results.map(r => ({ json: r }));\n"
+      },
+      "id": "route",
+      "name": "Handle Issues",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Minecraft Health Checks: OOM detection + TPS degradation\nconst panelUrl = 'http://pterodactyl-panel:80';\nconst clientKey = 'h9xX34wBLNWuIna0Z71P1XrZowPOsXvyoPWKEHDx2LpjMmbM7IPg7tdmG5hQQkX4';\nconst hdrs = { 'Authorization': 'Bearer ' + clientKey, 'Accept': 'application/json' };\nconst warnings = [];\n\ntry {\n  const data = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client', headers: hdrs, json: true });\n  const servers = data.data || [];\n\n  for (const srv of servers) {\n    const id = srv.attributes.identifier;\n    const name = srv.attributes.name;\n\n    try {\n      const resData = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client/servers/' + id + '/resources', headers: hdrs, json: true });\n      const attrs = resData.attributes;\n      if (attrs.current_state === 'running' && attrs.resources) {\n        const memUsed = attrs.resources.memory_bytes;\n        const memLimit = attrs.resources.memory_limit_bytes;\n        if (memLimit > 0) {\n          const pct = Math.round((memUsed / memLimit) * 100);\n          if (pct > 90) {\n            warnings.push({ server: name, type: 'memory_high', detail: pct + '% memory used (' + Math.round(memUsed / 1024 / 1024) + 'MB / ' + Math.round(memLimit / 1024 / 1024) + 'MB)' });\n          }\n        }\n      }\n    } catch(e) {}\n  }\n} catch(e) {\n  return [{ json: { mcHealthChecks: 'error', error: e.message } }];\n}\n\nif (warnings.length === 0) {\n  return [{ json: { mcHealthChecks: 'all_clear', warnings: [] } }];\n}\n\nreturn [{ json: { mcHealthChecks: 'warnings_found', warnings, timestamp: new Date().toISOString() } }];"
+      },
+      "id": "mc-health",
+      "name": "Minecraft Health Checks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "mc-warnings",
+              "leftValue": "={{ $json.mcHealthChecks }}",
+              "rightValue": "warnings_found",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "mc-has-warnings",
+      "name": "MC Warnings?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        750,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://stdb_backend:3000/v1/database/atlas/call/log_event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify([\"warning\", \"game_stack_healer\", JSON.stringify({ handler: $json.handler || 'mc_health', container: $json.container || 'minecraft', action: $json.action || 'health_warning', result: $json.result || 'logged', details: $json.log || $json.warnings || $json.message || '', crashCount: $json.crashCount, state: $json.state, timestamp: $json.timestamp || new Date().toISOString() })]) }}",
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "log-stdb",
+      "name": "Log to STDB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2100,
+        400
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://stdb_backend:3000/v1/database/atlas/call/log_event",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify([\"warning\", \"game_stack_healer\", JSON.stringify({ type: 'mc_health_warning', warnings: $json.warnings, timestamp: $json.timestamp })]) }}",
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "log-mc-warnings",
+      "name": "Log MC Warnings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1000,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "OK"
+      },
+      "id": "webhook-response",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        500,
+        650
+      ]
+    }
+  ],
+  "connections": {
+    "Every 2 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Pterodactyl Health Check",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Minecraft Health Checks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Uptime Kuma Alert": {
+      "main": [
+        [
+          {
+            "node": "Pterodactyl Health Check",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pterodactyl Health Check": {
+      "main": [
+        [
+          {
+            "node": "Classify Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Failure": {
+      "main": [
+        [
+          {
+            "node": "Any Issues?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Issues?": {
+      "main": [
+        [
+          {
+            "node": "Handle Issues",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Minecraft Health Checks": {
+      "main": [
+        [
+          {
+            "node": "MC Warnings?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MC Warnings?": {
+      "main": [
+        [
+          {
+            "node": "Log MC Warnings",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Handle Issues": {
+      "main": [
+        [
+          {
+            "node": "Log to STDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "d9xC7ZXOeDhQmdrU",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": {
+    "node:Every 2 Minutes": {
+      "recurrenceRules": []
+    },
+    "global": {
+      "stuckServers": {}
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "versionId": "08c2e021-fc19-41c0-837b-6f936edfc502",
+  "activeVersionId": "08c2e021-fc19-41c0-837b-6f936edfc502",
+  "versionCounter": 57,
+  "triggerCount": 2,
+  "shared": [
+    {
+      "updatedAt": "2026-03-08T16:16:06.450Z",
+      "createdAt": "2026-03-08T16:16:06.450Z",
+      "role": "workflow:owner",
+      "workflowId": "EbhS42WlJWliP04q",
+      "projectId": "Huitgtf9SMsMMh7b",
+      "project": {
+        "updatedAt": "2026-02-16T21:45:35.798Z",
+        "createdAt": "2026-02-16T21:45:20.948Z",
+        "id": "Huitgtf9SMsMMh7b",
+        "name": "Rohan Menon <rohanmenon27@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "7f578f37-d05e-45c3-92c4-afa779376839"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-03-08T17:36:25.829Z",
+    "createdAt": "2026-03-08T17:36:25.829Z",
+    "versionId": "08c2e021-fc19-41c0-837b-6f936edfc502",
+    "workflowId": "EbhS42WlJWliP04q",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "minutes",
+                "minutesInterval": 2
+              }
+            ]
+          }
+        },
+        "id": "schedule-trigger",
+        "name": "Every 2 Minutes",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          200,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "game-stack-alert",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "webhook-trigger",
+        "name": "Uptime Kuma Alert",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          200,
+          550
+        ],
+        "webhookId": "game-stack-alert-001"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Pterodactyl Game Stack Health Check\n// Checks all infrastructure containers + game servers via Docker socket\n\nconst http = require('http');\n\nfunction dockerGet(path) {\n  return new Promise((resolve, reject) => {\n    const opts = { socketPath: '/var/run/docker.sock', path, method: 'GET' };\n    const req = http.request(opts, (res) => {\n      let data = '';\n      res.on('data', chunk => data += chunk);\n      res.on('end', () => { try { resolve(JSON.parse(data)); } catch(e) { resolve(data); } });\n    });\n    req.on('error', reject);\n    req.end();\n  });\n}\n\nconst containers = await dockerGet('/containers/json?all=true');\n\n// Infrastructure containers\nconst infra = ['pterodactyl-db', 'pterodactyl-cache', 'pterodactyl-panel', 'pterodactyl-wings'];\nconst ptero = {};\n\nfor (const name of infra) {\n  const c = containers.find(c => c.Names.some(n => n === '/' + name));\n  if (c) {\n    ptero[name] = {\n      id: c.Id,\n      state: c.State,\n      status: c.Status,\n      healthy: c.State === 'running' && !c.Status.includes('unhealthy')\n    };\n  } else {\n    ptero[name] = { id: null, state: 'missing', status: 'not found', healthy: false };\n  }\n}\n\n// Game server containers (on pterodactyl_nw network, not infra)\nconst gameServers = containers.filter(c => {\n  const nets = c.NetworkSettings && c.NetworkSettings.Networks;\n  const onPteroNet = nets && nets.pterodactyl_nw;\n  const isInfra = infra.some(name => c.Names.includes('/' + name));\n  return onPteroNet && !isInfra;\n});\n\nconst gsStatus = gameServers.map(c => ({\n  id: c.Id,\n  name: c.Names[0].replace('/', ''),\n  state: c.State,\n  status: c.Status\n}));\n\nreturn [{ json: { ptero, gameServers: gsStatus, timestamp: new Date().toISOString() } }];\n"
+        },
+        "id": "health-check",
+        "name": "Pterodactyl Health Check",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          500,
+          400
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Classify failures by priority and type\nconst { ptero, gameServers } = $json;\nconst issues = [];\n\n// Check dependency order: DB -> Cache -> Panel -> Wings\nif (!ptero['pterodactyl-db'].healthy) {\n  issues.push({ type: 'db_down', container: 'pterodactyl-db', containerId: ptero['pterodactyl-db'].id, severity: 'critical' });\n}\nif (!ptero['pterodactyl-cache'].healthy) {\n  issues.push({ type: 'cache_down', container: 'pterodactyl-cache', containerId: ptero['pterodactyl-cache'].id, severity: 'high' });\n}\nif (!ptero['pterodactyl-panel'].healthy) {\n  issues.push({ type: 'panel_down', container: 'pterodactyl-panel', containerId: ptero['pterodactyl-panel'].id, severity: 'high' });\n}\nif (!ptero['pterodactyl-wings'].healthy) {\n  issues.push({ type: 'wings_down', container: 'pterodactyl-wings', containerId: ptero['pterodactyl-wings'].id, severity: 'critical' });\n}\n\n// Dead game servers\nconst deadGS = gameServers.filter(gs => gs.state !== 'running');\nfor (const gs of deadGS) {\n  issues.push({ type: 'game_server_down', container: gs.name, containerId: gs.id, severity: 'high' });\n}\n\n// Wings stuck detection: check via Pterodactyl API\nif (ptero['pterodactyl-wings'].healthy) {\n  try {\n    const panelUrl = 'http://pterodactyl-panel:80';\n    const clientKey = 'h9xX34wBLNWuIna0Z71P1XrZowPOsXvyoPWKEHDx2LpjMmbM7IPg7tdmG5hQQkX4';\n    const hdrs = { 'Authorization': 'Bearer ' + clientKey, 'Accept': 'application/json' };\n    const data = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client', headers: hdrs, json: true });\n    const servers = data.data || [];\n    const staticData = $getWorkflowStaticData('global');\n    if (!staticData.stuckServers) staticData.stuckServers = {};\n    const now = Date.now();\n\n    for (const srv of servers) {\n      const id = srv.attributes.identifier;\n      try {\n        const resData = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client/servers/' + id + '/resources', headers: hdrs, json: true });\n        const state = resData.attributes.current_state;\n        if (state === 'starting' || state === 'stopping') {\n          if (!staticData.stuckServers[id]) {\n            staticData.stuckServers[id] = now;\n          } else if (now - staticData.stuckServers[id] > 5 * 60 * 1000) {\n            issues.push({ type: 'wings_stuck', container: 'pterodactyl-wings', containerId: ptero['pterodactyl-wings'].id, severity: 'critical', stuckServer: id, stuckState: state });\n          }\n        } else {\n          delete staticData.stuckServers[id];\n        }\n      } catch(e) {}\n    }\n  } catch(e) {}\n}\n\nif (issues.length === 0) {\n  return [{ json: { healthy: true, issues: [], timestamp: new Date().toISOString() } }];\n}\n\nreturn [{ json: { healthy: false, issues, timestamp: new Date().toISOString() } }];"
+        },
+        "id": "classify",
+        "name": "Classify Failure",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          750,
+          400
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "loose"
+            },
+            "conditions": [
+              {
+                "id": "has-issues",
+                "leftValue": "={{ $json.healthy }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "notEquals"
+                }
+              }
+            ],
+            "combinator": "and"
+          }
+        },
+        "id": "any-issues",
+        "name": "Any Issues?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1000,
+          400
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Unified Issue Handler: routes + executes recovery for all issue types\nconst http = require('http');\nconst issues = $json.issues || [];\nconst results = [];\n\nfunction dockerPost(path) {\n  return new Promise((resolve, reject) => {\n    const opts = { socketPath: '/var/run/docker.sock', path, method: 'POST' };\n    const req = http.request(opts, (res) => {\n      let data = '';\n      res.on('data', chunk => data += chunk);\n      res.on('end', () => resolve({ status: res.statusCode, body: data }));\n    });\n    req.on('error', reject);\n    req.end();\n  });\n}\n\nfunction dockerGet(path) {\n  return new Promise((resolve, reject) => {\n    const opts = { socketPath: '/var/run/docker.sock', path, method: 'GET' };\n    const req = http.request(opts, (res) => {\n      let data = '';\n      res.on('data', chunk => data += chunk);\n      res.on('end', () => { try { resolve(JSON.parse(data)); } catch(e) { resolve(data); } });\n    });\n    req.on('error', reject);\n    req.end();\n  });\n}\n\nconst panelUrl = 'http://pterodactyl-panel:80';\nconst clientKey = 'h9xX34wBLNWuIna0Z71P1XrZowPOsXvyoPWKEHDx2LpjMmbM7IPg7tdmG5hQQkX4';\nconst hdrs = { 'Authorization': 'Bearer ' + clientKey, 'Accept': 'application/json', 'Content-Type': 'application/json' };\n\nfor (const issue of issues) {\n  const { type, container, containerId } = issue;\n\n  // === Handler A: DB/Cache restart ===\n  if (type === 'db_down' || type === 'cache_down') {\n    let success = false;\n    for (let attempt = 1; attempt <= 2; attempt++) {\n      try {\n        const result = await dockerPost('/containers/' + containerId + '/restart?t=30');\n        if (result.status === 204) {\n          await new Promise(r => setTimeout(r, 15000));\n          success = true;\n          break;\n        }\n      } catch(e) {}\n    }\n    results.push({ handler: 'support_restart', container, action: 'restart', result: success ? 'success' : 'failed', timestamp: new Date().toISOString() });\n  }\n\n  // === Handler B: Panel restart ===\n  else if (type === 'panel_down') {\n    let success = false;\n    try {\n      const result = await dockerPost('/containers/' + containerId + '/restart?t=30');\n      if (result.status === 204) {\n        await new Promise(r => setTimeout(r, 15000));\n        success = true;\n      }\n    } catch(e) {}\n    results.push({ handler: 'panel_restart', container, action: 'restart', result: success ? 'success' : 'failed', timestamp: new Date().toISOString() });\n  }\n\n  // === Handler C: Graceful Wings Recovery ===\n  else if (type === 'wings_down' || type === 'wings_stuck') {\n    const log = [];\n    let runningServers = [];\n\n    // Step 1: Get running servers from Panel\n    try {\n      const data = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client', headers: hdrs, json: true });\n      const servers = data.data || [];\n      for (const srv of servers) {\n        const id = srv.attributes.identifier;\n        try {\n          const resData = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client/servers/' + id + '/resources', headers: hdrs, json: true });\n          if (resData.attributes.current_state === 'running') {\n            runningServers.push(id);\n          }\n        } catch(e) {}\n      }\n      log.push('Found ' + runningServers.length + ' running server(s)');\n\n      // Step 2: Gracefully stop each\n      for (const id of runningServers) {\n        try {\n          await this.helpers.httpRequest({ method: 'POST', url: panelUrl + '/api/client/servers/' + id + '/power', headers: hdrs, body: { signal: 'stop' } });\n          log.push('Sent stop to ' + id);\n        } catch(e) {\n          log.push('Failed to stop ' + id + ': ' + e.message);\n        }\n      }\n      if (runningServers.length > 0) {\n        await new Promise(r => setTimeout(r, 30000));\n        log.push('Waited 30s for graceful shutdown');\n      }\n    } catch(e) {\n      log.push('Panel unreachable, skipping graceful stop: ' + e.message);\n    }\n\n    // Step 3: Restart Wings\n    try {\n      const containers = await dockerGet('/containers/json?all=true');\n      const wings = containers.find(c => c.Names.some(n => n === '/pterodactyl-wings'));\n      if (wings) {\n        const result = await dockerPost('/containers/' + wings.Id + '/restart?t=60');\n        log.push('Wings restart: ' + (result.status === 204 ? 'success' : 'failed (' + result.status + ')'));\n        await new Promise(r => setTimeout(r, 15000));\n        log.push('Waited 15s for Wings init');\n\n        // Step 4: Re-start servers\n        for (const id of runningServers) {\n          try {\n            await this.helpers.httpRequest({ method: 'POST', url: panelUrl + '/api/client/servers/' + id + '/power', headers: hdrs, body: { signal: 'start' } });\n            log.push('Sent start to ' + id);\n          } catch(e) {\n            log.push('Failed to start ' + id + ': ' + e.message);\n          }\n        }\n      } else {\n        log.push('Wings container not found!');\n      }\n    } catch(e) {\n      log.push('Wings restart error: ' + e.message);\n    }\n\n    results.push({ handler: 'wings_recovery', container, action: 'graceful_recovery', serversRestarted: runningServers, log, result: log.some(l => l.includes('success')) ? 'success' : 'partial', timestamp: new Date().toISOString() });\n  }\n\n  // === Handler D: Game Server Recovery ===\n  else if (type === 'game_server_down') {\n    const staticData = $getWorkflowStaticData('global');\n    if (!staticData.crashHistory) staticData.crashHistory = {};\n    const now = Date.now();\n    const ONE_HOUR = 60 * 60 * 1000;\n\n    if (!staticData.crashHistory[container]) {\n      staticData.crashHistory[container] = { lastCrash: 0, crashCount: 0, cooldownUntil: 0, state: 'healthy' };\n    }\n    const record = staticData.crashHistory[container];\n\n    if (now - record.lastCrash > ONE_HOUR && record.state !== 'crash_loop') {\n      record.crashCount = 0;\n      record.state = 'healthy';\n    }\n\n    if (record.cooldownUntil > now) {\n      results.push({ handler: 'game_server_recovery', container, action: 'waiting_cooldown', cooldownRemaining: Math.round((record.cooldownUntil - now) / 1000) + 's', crashCount: record.crashCount, state: record.state, timestamp: new Date().toISOString() });\n      continue;\n    }\n\n    if (record.state === 'crash_loop') {\n      results.push({ handler: 'game_server_recovery', container, action: 'crash_loop_detected', crashCount: record.crashCount, state: 'crash_loop', timestamp: new Date().toISOString() });\n      continue;\n    }\n\n    record.lastCrash = now;\n    record.crashCount++;\n    let action = 'restart';\n    let result = 'pending';\n\n    if (record.crashCount >= 3) {\n      record.state = 'crash_loop';\n      action = 'crash_loop_declared';\n      result = 'gave_up';\n    } else if (record.crashCount === 2) {\n      record.cooldownUntil = now + 15 * 60 * 1000;\n      record.state = 'recovering';\n      action = 'cooldown_15min';\n      result = 'scheduled';\n    } else {\n      record.cooldownUntil = now + 5 * 60 * 1000;\n      record.state = 'recovering';\n      action = 'cooldown_5min';\n      result = 'scheduled';\n    }\n\n    results.push({ handler: 'game_server_recovery', container, action, result, crashCount: record.crashCount, state: record.state, timestamp: new Date().toISOString() });\n  }\n}\n\nreturn results.map(r => ({ json: r }));\n"
+        },
+        "id": "route",
+        "name": "Handle Issues",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1250,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForEachItem",
+          "jsCode": "// Route each item to the correct output based on handler field\n// Output 0: support_restart | Output 1: panel_restart\n// Output 2: wings_recovery  | Output 3: game_server_recovery\nconst handler = $input.item.json.handler || \"unknown\";\nconst item = {json: {...$input.item.json}};\nif (handler === \"support_restart\") return [item, null, null, null];\nif (handler === \"panel_restart\") return [null, item, null, null];\nif (handler === \"wings_recovery\") return [null, null, item, null];\nif (handler === \"game_server_recovery\") return [null, null, null, item];\nreturn [null, null, null, null];",
+          "options": {
+            "numberOfOutputs": 4
+          }
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1500,
+          300
+        ],
+        "id": "switch-handler",
+        "name": "Switch Handler"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Handler A: Restart DB or Cache (simple restart)\nconst http = require('http');\n\nfunction dockerPost(path) {\n  return new Promise((resolve, reject) => {\n    const opts = { socketPath: '/var/run/docker.sock', path, method: 'POST' };\n    const req = http.request(opts, (res) => {\n      let data = '';\n      res.on('data', chunk => data += chunk);\n      res.on('end', () => resolve({ status: res.statusCode, body: data }));\n    });\n    req.on('error', reject);\n    req.end();\n  });\n}\n\nconst { container, containerId } = $json;\nlet success = false;\n\n// Try up to 2 restart attempts\nfor (let attempt = 1; attempt <= 2; attempt++) {\n  try {\n    const result = await dockerPost(`/containers/${containerId}/restart?t=30`);\n    if (result.status === 204) {\n      // Wait 15s and re-check\n      await new Promise(r => setTimeout(r, 15000));\n      success = true;\n      break;\n    }\n  } catch(e) { /* retry */ }\n}\n\nreturn [{ json: {\n  handler: 'support_restart',\n  container,\n  action: 'restart',\n  result: success ? 'success' : 'failed',\n  timestamp: new Date().toISOString()\n} }];\n"
+        },
+        "id": "handler-support",
+        "name": "Restart Support Service",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1800,
+          100
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Handler B: Restart Panel (simple â€” stateless for game servers)\nconst http = require('http');\n\nfunction dockerPost(path) {\n  return new Promise((resolve, reject) => {\n    const opts = { socketPath: '/var/run/docker.sock', path, method: 'POST' };\n    const req = http.request(opts, (res) => {\n      let data = '';\n      res.on('data', chunk => data += chunk);\n      res.on('end', () => resolve({ status: res.statusCode, body: data }));\n    });\n    req.on('error', reject);\n    req.end();\n  });\n}\n\nconst { containerId } = $json;\ntry {\n  const result = await dockerPost(`/containers/${containerId}/restart?t=30`);\n  return [{ json: {\n    handler: 'panel_restart',\n    container: 'pterodactyl-panel',\n    action: 'restart',\n    result: result.status === 204 ? 'success' : 'failed',\n    statusCode: result.status,\n    timestamp: new Date().toISOString()\n  } }];\n} catch(e) {\n  return [{ json: {\n    handler: 'panel_restart',\n    container: 'pterodactyl-panel',\n    action: 'restart',\n    result: 'failed',\n    error: e.message,\n    timestamp: new Date().toISOString()\n  } }];\n}\n"
+        },
+        "id": "handler-panel",
+        "name": "Restart Panel",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1800,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Handler C: Graceful Wings Recovery\nconst http = require('http');\n\nfunction dockerPost(path) {\n  return new Promise((resolve, reject) => {\n    const opts = { socketPath: '/var/run/docker.sock', path, method: 'POST' };\n    const req = http.request(opts, (res) => {\n      let data = '';\n      res.on('data', chunk => data += chunk);\n      res.on('end', () => resolve({ status: res.statusCode, body: data }));\n    });\n    req.on('error', reject);\n    req.end();\n  });\n}\n\nfunction dockerGet(path) {\n  return new Promise((resolve, reject) => {\n    const opts = { socketPath: '/var/run/docker.sock', path, method: 'GET' };\n    const req = http.request(opts, (res) => {\n      let data = '';\n      res.on('data', chunk => data += chunk);\n      res.on('end', () => { try { resolve(JSON.parse(data)); } catch(e) { resolve(data); } });\n    });\n    req.on('error', reject);\n    req.end();\n  });\n}\n\nconst panelUrl = 'http://pterodactyl-panel:80';\nconst clientKey = 'h9xX34wBLNWuIna0Z71P1XrZowPOsXvyoPWKEHDx2LpjMmbM7IPg7tdmG5hQQkX4';\nconst hdrs = { 'Authorization': 'Bearer ' + clientKey, 'Accept': 'application/json', 'Content-Type': 'application/json' };\nconst log = [];\nlet runningServers = [];\n\ntry {\n  const data = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client', headers: hdrs, json: true });\n  const servers = data.data || [];\n\n  for (const srv of servers) {\n    const id = srv.attributes.identifier;\n    try {\n      const resData = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client/servers/' + id + '/resources', headers: hdrs, json: true });\n      if (resData.attributes.current_state === 'running') {\n        runningServers.push(id);\n      }\n    } catch(e) {}\n  }\n  log.push('Found ' + runningServers.length + ' running server(s)');\n\n  for (const id of runningServers) {\n    try {\n      await this.helpers.httpRequest({\n        method: 'POST',\n        url: panelUrl + '/api/client/servers/' + id + '/power',\n        headers: hdrs,\n        body: { signal: 'stop' }\n      });\n      log.push('Sent stop to ' + id);\n    } catch(e) {\n      log.push('Failed to stop ' + id + ': ' + e.message);\n    }\n  }\n\n  if (runningServers.length > 0) {\n    await new Promise(r => setTimeout(r, 30000));\n    log.push('Waited 30s for graceful shutdown');\n  }\n} catch(e) {\n  log.push('Panel unreachable, skipping graceful stop: ' + e.message);\n}\n\ntry {\n  const containers = await dockerGet('/containers/json?all=true');\n  const wings = containers.find(c => c.Names.some(n => n === '/pterodactyl-wings'));\n  if (wings) {\n    const result = await dockerPost('/containers/' + wings.Id + '/restart?t=60');\n    log.push('Wings restart: ' + (result.status === 204 ? 'success' : 'failed (' + result.status + ')'));\n\n    await new Promise(r => setTimeout(r, 15000));\n    log.push('Waited 15s for Wings init');\n\n    for (const id of runningServers) {\n      try {\n        await this.helpers.httpRequest({\n          method: 'POST',\n          url: panelUrl + '/api/client/servers/' + id + '/power',\n          headers: hdrs,\n          body: { signal: 'start' }\n        });\n        log.push('Sent start to ' + id);\n      } catch(e) {\n        log.push('Failed to start ' + id + ': ' + e.message);\n      }\n    }\n  } else {\n    log.push('Wings container not found!');\n  }\n} catch(e) {\n  log.push('Wings restart error: ' + e.message);\n}\n\nreturn [{ json: {\n  handler: 'wings_recovery',\n  container: 'pterodactyl-wings',\n  action: 'graceful_recovery',\n  serversRestarted: runningServers,\n  log,\n  result: log.some(l => l.includes('success')) ? 'success' : 'partial',\n  timestamp: new Date().toISOString()\n} }];"
+        },
+        "id": "handler-wings",
+        "name": "Graceful Wings Recovery",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1800,
+          500
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Handler D: Game Server Recovery with Crash Loop Detection\nconst panelUrl = 'http://pterodactyl-panel:80';\nconst clientKey = 'h9xX34wBLNWuIna0Z71P1XrZowPOsXvyoPWKEHDx2LpjMmbM7IPg7tdmG5hQQkX4';\nconst hdrs = { 'Authorization': 'Bearer ' + clientKey, 'Accept': 'application/json', 'Content-Type': 'application/json' };\n\nconst staticData = $getWorkflowStaticData('global');\nif (!staticData.crashHistory) staticData.crashHistory = {};\n\nconst { container } = $json;\nconst now = Date.now();\nconst ONE_HOUR = 60 * 60 * 1000;\n\nif (!staticData.crashHistory[container]) {\n  staticData.crashHistory[container] = { lastCrash: 0, crashCount: 0, cooldownUntil: 0, state: 'healthy' };\n}\n\nconst record = staticData.crashHistory[container];\n\nif (now - record.lastCrash > ONE_HOUR && record.state !== 'crash_loop') {\n  record.crashCount = 0;\n  record.state = 'healthy';\n}\n\nif (record.cooldownUntil > now) {\n  return [{ json: {\n    handler: 'game_server_recovery', container,\n    action: 'waiting_cooldown',\n    cooldownRemaining: Math.round((record.cooldownUntil - now) / 1000) + 's',\n    crashCount: record.crashCount, state: record.state,\n    timestamp: new Date().toISOString()\n  } }];\n}\n\nif (record.state === 'crash_loop') {\n  return [{ json: {\n    handler: 'game_server_recovery', container,\n    action: 'crash_loop_detected', crashCount: record.crashCount,\n    state: 'crash_loop',\n    message: 'Server has crashed ' + record.crashCount + ' times in the last hour. Manual intervention required.',\n    timestamp: new Date().toISOString()\n  } }];\n}\n\nrecord.lastCrash = now;\nrecord.crashCount++;\n\nlet action = 'restart';\nlet result = 'pending';\n\nif (record.crashCount >= 3) {\n  record.state = 'crash_loop';\n  action = 'crash_loop_declared';\n  result = 'gave_up';\n} else if (record.crashCount === 2) {\n  record.cooldownUntil = now + 15 * 60 * 1000;\n  record.state = 'recovering';\n  action = 'cooldown_15min';\n  result = 'scheduled';\n} else {\n  record.cooldownUntil = now + 5 * 60 * 1000;\n  record.state = 'recovering';\n  action = 'cooldown_5min';\n  result = 'scheduled';\n}\n\nif (record.state === 'recovering' && record.cooldownUntil <= now) {\n  try {\n    const data = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client', headers: hdrs, json: true });\n    const servers = data.data || [];\n    for (const srv of servers) {\n      const id = srv.attributes.identifier;\n      try {\n        const resData = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client/servers/' + id + '/resources', headers: hdrs, json: true });\n        if (resData.attributes.current_state === 'offline') {\n          await this.helpers.httpRequest({\n            method: 'POST',\n            url: panelUrl + '/api/client/servers/' + id + '/power',\n            headers: hdrs,\n            body: { signal: 'start' }\n          });\n          action = 'restarted';\n          result = 'success';\n          break;\n        }\n      } catch(e) {}\n    }\n  } catch(e) {\n    result = 'failed';\n  }\n}\n\nreturn [{ json: {\n  handler: 'game_server_recovery', container, action, result,\n  crashCount: record.crashCount, state: record.state,\n  timestamp: new Date().toISOString()\n} }];"
+        },
+        "id": "handler-gameserver",
+        "name": "Game Server Recovery",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1800,
+          700
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Minecraft Health Checks: OOM detection + TPS degradation\nconst panelUrl = 'http://pterodactyl-panel:80';\nconst clientKey = 'h9xX34wBLNWuIna0Z71P1XrZowPOsXvyoPWKEHDx2LpjMmbM7IPg7tdmG5hQQkX4';\nconst hdrs = { 'Authorization': 'Bearer ' + clientKey, 'Accept': 'application/json' };\nconst warnings = [];\n\ntry {\n  const data = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client', headers: hdrs, json: true });\n  const servers = data.data || [];\n\n  for (const srv of servers) {\n    const id = srv.attributes.identifier;\n    const name = srv.attributes.name;\n\n    try {\n      const resData = await this.helpers.httpRequest({ method: 'GET', url: panelUrl + '/api/client/servers/' + id + '/resources', headers: hdrs, json: true });\n      const attrs = resData.attributes;\n      if (attrs.current_state === 'running' && attrs.resources) {\n        const memUsed = attrs.resources.memory_bytes;\n        const memLimit = attrs.resources.memory_limit_bytes;\n        if (memLimit > 0) {\n          const pct = Math.round((memUsed / memLimit) * 100);\n          if (pct > 90) {\n            warnings.push({ server: name, type: 'memory_high', detail: pct + '% memory used (' + Math.round(memUsed / 1024 / 1024) + 'MB / ' + Math.round(memLimit / 1024 / 1024) + 'MB)' });\n          }\n        }\n      }\n    } catch(e) {}\n  }\n} catch(e) {\n  return [{ json: { mcHealthChecks: 'error', error: e.message } }];\n}\n\nif (warnings.length === 0) {\n  return [{ json: { mcHealthChecks: 'all_clear', warnings: [] } }];\n}\n\nreturn [{ json: { mcHealthChecks: 'warnings_found', warnings, timestamp: new Date().toISOString() } }];"
+        },
+        "id": "mc-health",
+        "name": "Minecraft Health Checks",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          500,
+          100
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "loose"
+            },
+            "conditions": [
+              {
+                "id": "mc-warnings",
+                "leftValue": "={{ $json.mcHealthChecks }}",
+                "rightValue": "warnings_found",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          }
+        },
+        "id": "mc-has-warnings",
+        "name": "MC Warnings?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          750,
+          100
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://stdb_backend:3000/v1/database/atlas/call/log_event",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify([\"warning\", \"game_stack_healer\", JSON.stringify({ handler: $json.handler || 'mc_health', container: $json.container || 'minecraft', action: $json.action || 'health_warning', result: $json.result || 'logged', details: $json.log || $json.warnings || $json.message || '', crashCount: $json.crashCount, state: $json.state, timestamp: $json.timestamp || new Date().toISOString() })]) }}",
+          "options": {
+            "timeout": 5000
+          }
+        },
+        "id": "log-stdb",
+        "name": "Log to STDB",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2100,
+          400
+        ],
+        "onError": "continueRegularOutput"
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://stdb_backend:3000/v1/database/atlas/call/log_event",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify([\"warning\", \"game_stack_healer\", JSON.stringify({ type: 'mc_health_warning', warnings: $json.warnings, timestamp: $json.timestamp })]) }}",
+          "options": {
+            "timeout": 5000
+          }
+        },
+        "id": "log-mc-warnings",
+        "name": "Log MC Warnings",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1000,
+          0
+        ],
+        "onError": "continueRegularOutput"
+      },
+      {
+        "parameters": {
+          "respondWith": "text",
+          "responseBody": "OK"
+        },
+        "id": "webhook-response",
+        "name": "Respond OK",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.1,
+        "position": [
+          500,
+          650
+        ]
+      }
+    ],
+    "connections": {
+      "Every 2 Minutes": {
+        "main": [
+          [
+            {
+              "node": "Pterodactyl Health Check",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Minecraft Health Checks",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Uptime Kuma Alert": {
+        "main": [
+          [
+            {
+              "node": "Pterodactyl Health Check",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Respond OK",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Pterodactyl Health Check": {
+        "main": [
+          [
+            {
+              "node": "Classify Failure",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Classify Failure": {
+        "main": [
+          [
+            {
+              "node": "Any Issues?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Any Issues?": {
+        "main": [
+          [
+            {
+              "node": "Handle Issues",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Minecraft Health Checks": {
+        "main": [
+          [
+            {
+              "node": "MC Warnings?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "MC Warnings?": {
+        "main": [
+          [
+            {
+              "node": "Log MC Warnings",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Handle Issues": {
+        "main": [
+          [
+            {
+              "node": "Log to STDB",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "Rohan Menon",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-03-08T17:36:25.892Z",
+        "id": 181,
+        "workflowId": "EbhS42WlJWliP04q",
+        "versionId": "08c2e021-fc19-41c0-837b-6f936edfc502",
+        "event": "deactivated",
+        "userId": "7f578f37-d05e-45c3-92c4-afa779376839"
+      },
+      {
+        "createdAt": "2026-03-08T17:36:25.920Z",
+        "id": 182,
+        "workflowId": "EbhS42WlJWliP04q",
+        "versionId": "08c2e021-fc19-41c0-837b-6f936edfc502",
+        "event": "activated",
+        "userId": "7f578f37-d05e-45c3-92c4-afa779376839"
+      }
+    ]
+  }
+}

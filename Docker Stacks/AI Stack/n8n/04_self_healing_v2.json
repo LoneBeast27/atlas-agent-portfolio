@@ -1,0 +1,242 @@
+{
+    "name": "04_self_healing_v2",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "self-healing-trigger",
+                "responseMode": "responseNode",
+                "options": {}
+            },
+            "id": "webhook_trigger",
+            "name": "Webhook Trigger",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [
+                380,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "minutes",
+                            "minutes": 5
+                        }
+                    ]
+                }
+            },
+            "id": "schedule_trigger",
+            "name": "Schedule Trigger",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.1,
+            "position": [
+                380,
+                240
+            ]
+        },
+        {
+            "parameters": {
+                "command": "docker ps --filter \"health=unhealthy\" --format \"{{.Names}}\""
+            },
+            "id": "ssh_check_health",
+            "name": "Check Unhealthy",
+            "type": "n8n-nodes-base.ssh",
+            "typeVersion": 1,
+            "position": [
+                600,
+                200
+            ],
+            "credentials": {
+                "sshPrivateKey": {
+                    "id": "IOkLyKN6qxpzPHdf",
+                    "name": "Ultimus SSH"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "string": [
+                        {
+                            "value1": "={{ $json.stdout }}",
+                            "operation": "isNotEmpty"
+                        }
+                    ]
+                }
+            },
+            "id": "check_if_any",
+            "name": "Any Unhealthy?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                820,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "command": "=docker restart {{ $node[\"Check Unhealthy\"].json.stdout.split('\\n').join(' ') }}"
+            },
+            "id": "ssh_restart",
+            "name": "Restart Containers",
+            "type": "n8n-nodes-base.ssh",
+            "typeVersion": 1,
+            "position": [
+                1040,
+                100
+            ],
+            "credentials": {
+                "sshPrivateKey": {
+                    "id": "IOkLyKN6qxpzPHdf",
+                    "name": "Ultimus SSH"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "values": {
+                    "string": [
+                        {
+                            "name": "text",
+                            "value": "=[SUCCESS] **Self-Healing Complete**\nRestarted: {{ $node[\"Check Unhealthy\"].json.stdout }}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "format_success",
+            "name": "Format Success",
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 2,
+            "position": [
+                1260,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "values": {
+                    "string": [
+                        {
+                            "name": "text",
+                            "value": "[HEALTHY] **System Healthy**\nNo unhealthy containers found."
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "format_healthy",
+            "name": "Format Healthy",
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 2,
+            "position": [
+                1040,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "respondWith": "json",
+                "responseBody": "={{ $json }}",
+                "options": {}
+            },
+            "id": "respond_to_webhook",
+            "name": "Respond to Webhook",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1,
+            "position": [
+                1480,
+                200
+            ]
+        }
+    ],
+    "connections": {
+        "Webhook Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Check Unhealthy",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Check Unhealthy",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Check Unhealthy": {
+            "main": [
+                [
+                    {
+                        "node": "Any Unhealthy?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Any Unhealthy?": {
+            "main": [
+                [
+                    {
+                        "node": "Restart Containers",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Format Healthy",
+                        "type": "main",
+                        "index": 1
+                    }
+                ]
+            ]
+        },
+        "Restart Containers": {
+            "main": [
+                [
+                    {
+                        "node": "Format Success",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Format Success": {
+            "main": [
+                [
+                    {
+                        "node": "Respond to Webhook",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Format Healthy": {
+            "main": [
+                [
+                    {
+                        "node": "Respond to Webhook",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    }
+}

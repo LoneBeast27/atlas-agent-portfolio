@@ -1,0 +1,60 @@
+# Environment files (contain secrets)
+.env
+*.env.local
+
+# Runtime data
+data/
+stdb_data/
+node_modules/
+__pycache__/
+*.pyc
+dist/
+
+# Logs
+*.log
+
+# Database files
+*.db
+*.sqlite
+*.wt
+*.lock
+
+# MongoDB data
+**/mongo/
+**/mongodb/
+diagnostic.data/
+
+# PostgreSQL data
+**/postgres_data/
+**/pgdata/
+
+# Komodo runtime data
+**/komodo/
+
+# n8n runtime data (workflows are kept as exported JSON)
+**/n8n_data/
+
+# Playit tunnel data
+**/playit/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Build artifacts
+*.egg-info/
+build/
+
+# Docker
+docker-compose.override.yml
+
+# Temp
+*.tmp
+*.bak
+
+# PowerShell helper (not needed in repo)
+copy-stacks.ps1

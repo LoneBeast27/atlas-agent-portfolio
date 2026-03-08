@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pydantic
+qdrant-client
+pydantic-ai
+requests
+pyyaml
+httpx

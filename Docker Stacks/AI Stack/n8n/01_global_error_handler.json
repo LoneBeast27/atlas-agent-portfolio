@@ -1,0 +1,95 @@
+{
+    "name": "Global Error Handler",
+    "nodes": [
+        {
+            "parameters": {},
+            "id": "error_trigger",
+            "name": "Error Trigger",
+            "type": "n8n-nodes-base.errorTrigger",
+            "typeVersion": 1,
+            "position": [
+                460,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "keepOnlySet": true,
+                "values": {
+                    "string": [
+                        {
+                            "name": "timestamp",
+                            "value": "={{ $now }}"
+                        },
+                        {
+                            "name": "workflow_name",
+                            "value": "={{ $node[\"Error Trigger\"].json.workflow.name }}"
+                        },
+                        {
+                            "name": "workflow_id",
+                            "value": "={{ $node[\"Error Trigger\"].json.workflow.id }}"
+                        },
+                        {
+                            "name": "failed_node",
+                            "value": "={{ $node[\"Error Trigger\"].json.execution.lastNodeExecuted }}"
+                        },
+                        {
+                            "name": "error_message",
+                            "value": "={{ $node[\"Error Trigger\"].json.execution.error.message }}"
+                        },
+                        {
+                            "name": "execution_url",
+                            "value": "={{ $node[\"Error Trigger\"].json.execution.url }}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "format_error",
+            "name": "Format Error",
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 2,
+            "position": [
+                680,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const fs = require('fs');\nconst logFile = '/home/node/.n8n/global_error.log';\nconst errorData = items[0].json;\nconst logEntry = JSON.stringify(errorData) + '\\n';\n\ntry {\n  fs.appendFileSync(logFile, logEntry);\n  return [{ json: { success: true, logged: true } }];\n} catch (error) {\n  return [{ json: { success: false, error: error.message } }];\n}"
+            },
+            "id": "log_to_file_code",
+            "name": "Log via FS",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                900,
+                300
+            ]
+        }
+    ],
+    "connections": {
+        "Error Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Format Error",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Format Error": {
+            "main": [
+                [
+                    {
+                        "node": "Log via FS",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    }
+}

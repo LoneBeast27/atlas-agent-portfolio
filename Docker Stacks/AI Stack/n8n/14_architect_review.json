@@ -1,0 +1,260 @@
+{
+  "name": "14_architect_review",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 3 * * *"
+            }
+          ]
+        }
+      },
+      "id": "dd293877-ce17-45ae-b8fe-3b823a530a28",
+      "name": "Daily 3AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "architect-review",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "dfd98b50-8ad0-4a38-83a7-81ff67dcfc88",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        500
+      ],
+      "webhookId": "architect-review-wh"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fetch last 24h of webhook executions from n8n internal API\nconst apiKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI3ZjU3OGYzNy1kMDVlLTQ1YzMtOTJjNC1hZmE3NzkzNzY4MzkiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwianRpIjoiZmQyNzI5MzMtZTRhZi00YTkwLTkyMzUtMWZiZTc0YmQ5NzIzIiwiaWF0IjoxNzcyNjQyODE1fQ.It-V1MgIzXPSjMd_bX_8A126iU6rG6_KY-_3kgFyDRI';\nconst since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();\n\nconst resp = await this.helpers.httpRequest({\n  method: 'GET',\n  url: 'http://localhost:5678/api/v1/executions?limit=100',\n  headers: { 'X-N8N-API-KEY': apiKey }\n});\n\nconst allExecs = resp.data || resp || [];\nconst executions = allExecs.filter(e => e.startedAt && new Date(e.startedAt) >= new Date(since));\n\nconst toolWorkflows = ['Music Bot', 'minecraft', 'Docker Control', 'self_healing', 'Capabilities'];\nconst toolCalls = executions.filter(e =>\n  toolWorkflows.some(n => (e.workflowName || '').toLowerCase().includes(n.toLowerCase()))\n);\nconst errors = executions.filter(e => e.status === 'error');\n\nreturn {\n  json: {\n    period: `${since} to ${new Date().toISOString()}`,\n    totalExecutions: executions.length,\n    successful: executions.filter(e => e.status === 'success').length,\n    failed: errors.length,\n    errorDetails: errors.slice(0, 10).map(e => ({\n      workflow: e.workflowName || e.workflowId,\n      startedAt: e.startedAt\n    })),\n    toolCallCount: toolCalls.length,\n    summary: `${executions.length} executions (${executions.filter(e => e.status === 'success').length} ok, ${errors.length} errors) in last 24h. ${toolCalls.length} tool-related.`\n  }\n};"
+      },
+      "id": "a58dd967-e11b-40bb-a900-5573c07ab3a2",
+      "name": "Collect Execution Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Call Ollama Qwen3 32B for Architect analysis\nconst inputData = $input.first().json;\nconst NL = String.fromCharCode(10);\n\nconst systemLines = [\n  \"You are the Atlas Architect, a senior AI that reviews the Atlas Operator performance and proposes improvements.\",\n  \"You analyze execution data and output structured JSON proposals.\",\n  \"\",\n  \"Output ONLY valid JSON with this structure:\",\n  '{ \"analysis\": \"brief summary\", \"proposals\": [ { \"category\": \"safe|risky|blocked\", \"toolAffected\": \"tool_name\", \"description\": \"what to change\", \"diff\": \"specific change\" } ], \"healthScore\": 0-100 }',\n  \"\",\n  \"Categories:\",\n  \"- safe: Knowledge base updates, tool description tweaks, documentation\",\n  \"- risky: System prompt changes, new tool definitions, behavioral changes\",\n  \"- blocked: Removing safety rules, disabling tools\",\n  \"\",\n  \"If everything looks good, return empty proposals array with a positive analysis. /no_think\"\n];\nconst systemPrompt = systemLines.join(NL);\nconst userPrompt = \"Review the Atlas Operator performance for the last 24 hours:\" + NL + NL + JSON.stringify(inputData, null, 2);\n\nconst body = {\n  model: \"qwen3:32b\",\n  messages: [\n    { role: \"system\", content: systemPrompt },\n    { role: \"user\", content: userPrompt }\n  ],\n  temperature: 0.3,\n  max_tokens: 2000\n};\n\nconst response = await this.helpers.httpRequest({\n  method: \"POST\",\n  url: \"http://ollama:11434/v1/chat/completions\",\n  body: body,\n  json: true,\n  timeout: 180000,\n  headers: {\n    \"Content-Type\": \"application/json\"\n  }\n});\n\nreturn { json: response };"
+      },
+      "id": "156c4035-62ee-4722-8420-d05a5e4f3079",
+      "name": "Architect Analysis (32B)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Architect response and classify proposals\nconst response = $input.first().json;\nlet content = \"\";\ntry {\n  const choices = response.choices || [];\n  if (choices.length > 0) {\n    content = choices[0].message?.content || \"\";\n  }\n} catch(e) {\n  return { json: { error: \"Failed to parse Architect response\", raw: JSON.stringify(response).substring(0, 500) } };\n}\n\n// Extract JSON from response (may be wrapped in markdown code blocks)\nlet parsed;\ntry {\n  // Use RegExp constructor to avoid newline issues in regex literals\n  const codeBlockRe = new RegExp(\"```json\\s*([\\s\\S]*?)\\s*```\");\n  const jsonObjRe = new RegExp(\"(\\{[\\s\\S]*\\})\");\n  const jsonMatch = content.match(codeBlockRe) || content.match(jsonObjRe);\n  parsed = JSON.parse(jsonMatch ? jsonMatch[1] : content);\n} catch(e) {\n  return { json: { error: \"Failed to parse JSON from Architect\", raw: content.substring(0, 500) } };\n}\n\nconst proposals = parsed.proposals || [];\nconst analysis = parsed.analysis || \"No analysis provided\";\nconst healthScore = parsed.healthScore || 0;\n\n// Log to SpacetimeDB\nconst stdbUrl = \"http://stdb_backend:3000/v1/database/atlas/call\";\nconst execData = $(\"Collect Execution Data\").first().json;\n\ntry {\n  await this.helpers.httpRequest({\n    method: \"POST\",\n    url: stdbUrl + \"/record_daily_metrics\",\n    headers: { \"Content-Type\": \"application/json\" },\n    body: JSON.stringify({\n      date: new Date().toISOString().split(\"T\")[0],\n      totalToolCalls: execData.toolCallCount || 0,\n      successfulCalls: execData.successful || 0,\n      failedCalls: execData.failed || 0,\n      avgLatencyMs: 0,\n      promptfooScore: 100.0,\n      topFailedTool: \"none\"\n    })\n  });\n} catch(e) { console.log(\"STDB metrics write failed:\", e.message); }\n\nfor (const p of proposals) {\n  try {\n    await this.helpers.httpRequest({\n      method: \"POST\",\n      url: stdbUrl + \"/submit_proposal\",\n      headers: { \"Content-Type\": \"application/json\" },\n      body: JSON.stringify({\n        category: p.category || \"safe\",\n        toolAffected: p.toolAffected || \"general\",\n        description: p.description || \"\",\n        diff: p.diff || \"\",\n        evalScoreBefore: 100.0\n      })\n    });\n  } catch(e) { console.log(\"STDB proposal write failed:\", e.message); }\n}\n\ntry {\n  await this.helpers.httpRequest({\n    method: \"POST\",\n    url: stdbUrl + \"/log_event\",\n    headers: { \"Content-Type\": \"application/json\" },\n    body: JSON.stringify({\n      severity: \"info\",\n      service: \"architect-review\",\n      payload: JSON.stringify({ analysis, healthScore, proposalCount: proposals.length })\n    })\n  });\n} catch(e) {}\n\nreturn {\n  json: {\n    analysis,\n    healthScore,\n    proposals,\n    safeCount: proposals.filter(p => p.category === \"safe\").length,\n    riskyCount: proposals.filter(p => p.category === \"risky\").length,\n    blockedCount: proposals.filter(p => p.category === \"blocked\").length,\n    metricsLogged: true\n  }\n};"
+      },
+      "id": "46213945-8db1-4515-a876-7ac0614c37e8",
+      "name": "Classify & Log to STDB",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "has-proposals",
+              "leftValue": "={{ $json.proposals.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "2d068af1-5526-47d1-8bde-7bcbeba5b6cb",
+      "name": "Has Proposals?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1200,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format the review summary for the webhook response\nconst data = $input.first().json;\n\nlet report = `# Architect Review \u00e2\u20ac\u201d ${new Date().toISOString().split('T')[0]}\\n\\n`;\nreport += `**Health Score:** ${data.healthScore}/100\\n`;\nreport += `**Analysis:** ${data.analysis}\\n\\n`;\n\nif (data.proposals && data.proposals.length > 0) {\n  report += `## Proposals (${data.proposals.length})\\n\\n`;\n  for (const p of data.proposals) {\n    const icon = p.category === 'safe' ? '\u00e2\u0153\u2026' : p.category === 'risky' ? '\u00e2\u0161\u00a0\u00ef\u00b8\udc8f' : '\u00f0\u0178\u0161\u00ab';\n    report += `${icon} **[${p.category.toUpperCase()}]** ${p.toolAffected}: ${p.description}\\n`;\n    if (p.diff) report += `   \u00e2\u2020\u2019 ${p.diff}\\n`;\n    report += '\\n';\n  }\n  report += `Safe: ${data.safeCount} | Risky: ${data.riskyCount} | Blocked: ${data.blockedCount}\\n`;\n} else {\n  report += '**No proposals \u00e2\u20ac\u201d system is healthy.**\\n';\n}\n\nreport += `\\n_Logged to SpacetimeDB._`;\n\nreturn { json: { report, ...data } };"
+      },
+      "id": "9078f8ca-72e7-4301-a1ef-a0b2015c8ed1",
+      "name": "Format Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// No proposals \u00e2\u20ac\u201d system is healthy\nconst data = $input.first().json;\nreturn {\n  json: {\n    report: `# Architect Review \u00e2\u20ac\u201d ${new Date().toISOString().split('T')[0]}\\n\\n**Health Score:** ${data.healthScore}/100\\n**Analysis:** ${data.analysis}\\n\\n**No proposals \u00e2\u20ac\u201d system is healthy.**\\n\\n_Logged to SpacetimeDB._`,\n    ...data\n  }\n};"
+      },
+      "id": "492827af-e567-4535-a6df-ebd807c42e9e",
+      "name": "Healthy - No Changes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'ok', report: $json.report, healthScore: $json.healthScore, proposals: $json.proposals || [] }) }}"
+      },
+      "id": "2e0d3282-d529-45c7-b9d4-cebd72b9f373",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1680,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Daily 3AM": {
+      "main": [
+        [
+          {
+            "node": "Collect Execution Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Collect Execution Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Execution Data": {
+      "main": [
+        [
+          {
+            "node": "Architect Analysis (32B)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Architect Analysis (32B)": {
+      "main": [
+        [
+          {
+            "node": "Classify & Log to STDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify & Log to STDB": {
+      "main": [
+        [
+          {
+            "node": "Has Proposals?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Proposals?": {
+      "main": [
+        [
+          {
+            "node": "Format Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Healthy - No Changes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Report": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Healthy - No Changes": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "d9xC7ZXOeDhQmdrU",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": {
+    "node:Daily 3AM": {
+      "recurrenceRules": []
+    }
+  }
+}

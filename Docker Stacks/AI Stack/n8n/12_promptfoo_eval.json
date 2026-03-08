@@ -1,0 +1,115 @@
+{
+  "name": "12_promptfoo_eval",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 3 * * 1"
+            }
+          ]
+        }
+      },
+      "name": "Weekly Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "atlas-eval-trigger",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "name": "Manual Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 500],
+      "webhookId": "promptfoo-eval-v2"
+    },
+    {
+      "parameters": {
+        "jsCode": "const http = require('http');\n\nfunction dockerApi(method, path, body) {\n  return new Promise((resolve, reject) => {\n    const options = {\n      socketPath: '/var/run/docker.sock',\n      path,\n      method,\n      headers: { 'Content-Type': 'application/json' },\n    };\n    const req = http.request(options, res => {\n      let data = '';\n      res.on('data', chunk => data += chunk);\n      res.on('end', () => {\n        try {\n          resolve({ status: res.statusCode, body: JSON.parse(data) });\n        } catch {\n          resolve({ status: res.statusCode, body: data });\n        }\n      });\n    });\n    req.on('error', reject);\n    if (body) req.write(JSON.stringify(body));\n    req.end();\n  });\n}\n\nfunction dockerExecRaw(method, path, body) {\n  return new Promise((resolve, reject) => {\n    const options = {\n      socketPath: '/var/run/docker.sock',\n      path,\n      method,\n      headers: { 'Content-Type': 'application/json' },\n    };\n    const req = http.request(options, res => {\n      const chunks = [];\n      res.on('data', chunk => chunks.push(chunk));\n      res.on('end', () => {\n        const buf = Buffer.concat(chunks);\n        let output = '';\n        let offset = 0;\n        while (offset < buf.length) {\n          if (offset + 8 > buf.length) break;\n          const size = buf.readUInt32BE(offset + 4);\n          if (offset + 8 + size > buf.length) {\n            output += buf.slice(offset + 8).toString('utf8');\n            break;\n          }\n          output += buf.slice(offset + 8, offset + 8 + size).toString('utf8');\n          offset += 8 + size;\n        }\n        resolve(output);\n      });\n    });\n    req.on('error', reject);\n    if (body) req.write(JSON.stringify(body));\n    req.end();\n  });\n}\n\nconst execCreate = await dockerApi('POST', '/containers/promptfoo/exec', {\n  AttachStdout: true,\n  AttachStderr: true,\n  Cmd: ['sh', '-c', 'cd /app && promptfoo eval --no-cache -c promptfooconfig.yaml 2>&1']\n});\n\nif (execCreate.status !== 201) {\n  return [{ json: { error: 'Failed to create exec', detail: JSON.stringify(execCreate.body) } }];\n}\n\nconst execId = execCreate.body.Id;\nconst output = await dockerExecRaw('POST', '/exec/' + execId + '/start', {\n  Detach: false,\n  Tty: false\n});\n\nconst inspect = await dockerApi('GET', '/exec/' + execId + '/json');\n\nconst resultsMatch = output.match(/(\\d+) passed.*?(\\d+) failed.*?(\\d+) errors.*?\\(([\\d.]+)%\\)/);\n\nlet passed = 0, failed = 0, errors = 0, score = 0;\nif (resultsMatch) {\n  passed = parseInt(resultsMatch[1]);\n  failed = parseInt(resultsMatch[2]);\n  errors = parseInt(resultsMatch[3]);\n  score = parseFloat(resultsMatch[4]);\n}\n\nreturn [{\n  json: {\n    timestamp: new Date().toISOString(),\n    passed,\n    failed,\n    errors,\n    score,\n    total: passed + failed + errors,\n    exitCode: inspect.body?.ExitCode ?? -1,\n    rawOutput: output.substring(output.length - 500)\n  }\n}];"
+      },
+      "name": "Run Promptfoo Eval",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "score-check",
+              "leftValue": "={{ $json.score }}",
+              "rightValue": 90,
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "or"
+        }
+      },
+      "name": "Score < 90%?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst alertMsg = `Atlas Operator Eval Regression\\n\\nScore: ${data.score}% (threshold: 90%)\\nPassed: ${data.passed}/${data.total}\\nFailed: ${data.failed}\\nErrors: ${data.errors}\\nTimestamp: ${data.timestamp}\\n\\nCheck Promptfoo UI at http://localhost:3005 for details.`;\n\nreturn [{ json: { ...data, alert: true, alertMessage: alertMsg } }];"
+      },
+      "name": "Format Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nreturn [{ json: { ...data, alert: false, message: `Eval passed: ${data.score}% (${data.passed}/${data.total})` } }];"
+      },
+      "name": "Log Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 500]
+    }
+  ],
+  "connections": {
+    "Weekly Schedule": {
+      "main": [
+        [{ "node": "Run Promptfoo Eval", "type": "main", "index": 0 }]
+      ]
+    },
+    "Manual Webhook": {
+      "main": [
+        [{ "node": "Run Promptfoo Eval", "type": "main", "index": 0 }]
+      ]
+    },
+    "Run Promptfoo Eval": {
+      "main": [
+        [{ "node": "Score < 90%?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Score < 90%?": {
+      "main": [
+        [{ "node": "Format Alert", "type": "main", "index": 0 }],
+        [{ "node": "Log Success", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "d9xC7ZXOeDhQmdrU"
+  }
+}

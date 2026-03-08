@@ -1,0 +1,184 @@
+x-common-keys: &common-keys
+  restart: unless-stopped
+  logging:
+    driver: json-file
+  env_file: '.env'
+
+services:
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  #  Uptime Kuma — Service health monitoring
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  uptime-kuma:
+    <<: *common-keys
+    image: louislam/uptime-kuma:latest
+    container_name: uptime-kuma
+    ports:
+      - 3001:3001
+    volumes:
+      - '${SPEED_DRIVE}/uptime-kuma:/app/data'
+    networks:
+      - web_proxy
+      - default
+    healthcheck:
+      test: [ "CMD-SHELL", "node -e \"const http = require('http'); const options = { hostname: 'localhost', port: 3001, path: '/api/entry-page', timeout: 2000 }; const req = http.request(options, (res) => { process.exit(res.statusCode === 200 ? 0 : 1); }); req.on('error', () => process.exit(1)); req.end();\"" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  #  Prometheus — Metrics collection
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  prometheus:
+    <<: *common-keys
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - 9091:9090
+    volumes:
+      - '${SPEED_DRIVE}/monitoring/prometheus:/prometheus'
+      - '${SPEED_DRIVE}/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro'
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    networks:
+      - web_proxy
+      - default
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --spider --quiet http://localhost:9090/-/healthy || exit 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  #  Grafana — Dashboards & visualization
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  grafana:
+    <<: *common-keys
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - 3002:3000
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD}
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-piechart-panel
+    volumes:
+      - '${SPEED_DRIVE}/monitoring/grafana:/var/lib/grafana'
+    networks:
+      - web_proxy
+      - default
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --spider --quiet http://localhost:3000/api/health || exit 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  #  cAdvisor — Container metrics
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  cadvisor:
+    <<: *common-keys
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
+    ports:
+      - 8082:8080
+    volumes:
+      - '/:/rootfs:ro'
+      - '/var/run:/var/run:ro'
+      - '/sys:/sys:ro'
+      - '/var/lib/docker/:/var/lib/docker:ro'
+    networks:
+      - default
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  #  Node Exporter — Host OS metrics
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  node-exporter:
+    <<: *common-keys
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    ports:
+      - 9100:9100
+    volumes:
+      - '/proc:/host/proc:ro'
+      - '/sys:/host/sys:ro'
+      - '/:/rootfs:ro'
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - default
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  #  Watchtower — Auto-update containers
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  watchtower:
+    <<: *common-keys
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_SCHEDULE=0 0 4 * * *
+      - WATCHTOWER_INCLUDE_STOPPED=false
+      - WATCHTOWER_ROLLING_RESTART=true
+      - WATCHTOWER_TIMEOUT=60s
+      - DOCKER_API_VERSION=1.44
+      - TZ=Asia/Kolkata
+    volumes:
+      - '/var/run/docker.sock:/var/run/docker.sock'
+    networks:
+      - default
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  #  Homepage — Service dashboard
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  homepage:
+    <<: *common-keys
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    ports:
+      - 3003:3000
+    volumes:
+      - '${SPEED_DRIVE}/homepage:/app/config'
+      - '/var/run/docker.sock:/var/run/docker.sock:ro'
+    networks:
+      - web_proxy
+      - default
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --spider --quiet http://localhost:3000/ || exit 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+networks:
+  web_proxy:
+    external: true

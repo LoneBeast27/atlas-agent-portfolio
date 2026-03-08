@@ -1,0 +1,245 @@
+{
+    "name": "06_minecraft_bot",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "minecraft-control",
+                "options": {}
+            },
+            "id": "webhook",
+            "name": "Webhook",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [
+                460,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "string": [
+                        {
+                            "value1": "={{ $json.body.command }}",
+                            "operation": "equal",
+                            "value2": "status"
+                        },
+                        {
+                            "value1": "={{ $json.body.command }}",
+                            "operation": "equal",
+                            "value2": "restart"
+                        },
+                        {
+                            "value1": "={{ $json.body.command }}",
+                            "operation": "equal",
+                            "value2": "backup"
+                        }
+                    ]
+                }
+            },
+            "id": "router",
+            "name": "Command Router",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                680,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "command": "docker ps --filter \"name=minecraft\" --format \"table {{.Names}}\\t{{.Status}}\\t{{.Ports}}\""
+            },
+            "id": "ssh_status",
+            "name": "Get Status",
+            "type": "n8n-nodes-base.ssh",
+            "typeVersion": 1,
+            "position": [
+                940,
+                100
+            ],
+            "credentials": {
+                "sshPrivateKey": {
+                    "id": "IOkLyKN6qxpzPHdf",
+                    "name": "Ultimus SSH"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "command": "docker restart minecraft"
+            },
+            "id": "ssh_restart",
+            "name": "Restart Server",
+            "type": "n8n-nodes-base.ssh",
+            "typeVersion": 1,
+            "position": [
+                940,
+                300
+            ],
+            "credentials": {
+                "sshPrivateKey": {
+                    "id": "IOkLyKN6qxpzPHdf",
+                    "name": "Ultimus SSH"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "command": "docker exec minecraft rcon-cli save-all && docker exec minecraft rcon-cli save-off && docker exec minecraft rcon-cli save-on && echo 'Backup initiated (Logic pending implementation)'"
+            },
+            "id": "ssh_backup",
+            "name": "Trigger Backup",
+            "type": "n8n-nodes-base.ssh",
+            "typeVersion": 1,
+            "position": [
+                940,
+                500
+            ],
+            "credentials": {
+                "sshPrivateKey": {
+                    "id": "IOkLyKN6qxpzPHdf",
+                    "name": "Ultimus SSH"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "keepOnlySet": true,
+                "values": {
+                    "string": [
+                        {
+                            "name": "text",
+                            "value": "=⛏️ **Minecraft Status**\n{{ $json.stdout }}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "fmt_status",
+            "name": "Format Status",
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 2,
+            "position": [
+                1160,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "keepOnlySet": true,
+                "values": {
+                    "string": [
+                        {
+                            "name": "text",
+                            "value": "=🔄 **Server Restarted**\nThe Minecraft server is rebooting. It may take 1-2 minutes to be joinable."
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "fmt_restart",
+            "name": "Format Restart",
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 2,
+            "position": [
+                1160,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "keepOnlySet": true,
+                "values": {
+                    "string": [
+                        {
+                            "name": "text",
+                            "value": "=💾 **Backup triggered**\nOutput: {{ $json.stdout }}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "fmt_backup",
+            "name": "Format Backup",
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 2,
+            "position": [
+                1160,
+                500
+            ]
+        }
+    ],
+    "connections": {
+        "Webhook": {
+            "main": [
+                [
+                    {
+                        "node": "Command Router",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Command Router": {
+            "main": [
+                [
+                    {
+                        "node": "Get Status",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Restart Server",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Trigger Backup",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Status": {
+            "main": [
+                [
+                    {
+                        "node": "Format Status",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Restart Server": {
+            "main": [
+                [
+                    {
+                        "node": "Format Restart",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Trigger Backup": {
+            "main": [
+                [
+                    {
+                        "node": "Format Backup",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    }
+}

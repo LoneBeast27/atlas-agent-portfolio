@@ -1,0 +1,283 @@
+x-common-keys: &common-keys
+  restart: unless-stopped
+  logging:
+    driver: json-file
+  env_file: '.env'
+
+services:
+  postgres:
+    <<: *common-keys
+    image: postgres:16
+    container_name: n8n-postgres
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - '${SPEED_DRIVE}/n8n/postgres_data:/var/lib/postgresql/data'
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - default
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  n8n:
+    <<: *common-keys
+    image: n8nio/n8n:latest
+    container_name: n8n
+    user: root
+    ports:
+      - 5678:5678
+
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - N8N_SECURE_COOKIE=true
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - NODE_FUNCTION_ALLOW_BUILTIN=*
+      - NODE_FUNCTION_ALLOW_EXTERNAL=*
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=168
+      - N8N_MIGRATE_FS_STORAGE_PATH=true
+      - N8N_RUNNERS_TASK_TIMEOUT=600
+      - N8N_CONCURRENCY_PRODUCTION_LIMIT=1
+    networks:
+      - web_proxy
+      - default
+    depends_on:
+      - postgres
+    volumes:
+      - '${SPEED_DRIVE}/n8n/data:/home/node/.n8n'
+      - 'C:/Docker Speed Drive/n8n_atlas_key:/data/n8n_atlas_key'
+      - 'C:/Docker Speed Drive/Docker Stacks/AI Stack/n8n:/docker-workflows'
+      - '/var/run/docker.sock:/var/run/docker.sock'
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --spider --quiet http://localhost:5678/healthz || exit 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  ollama:
+    <<: *common-keys
+    image: ollama/ollama:latest
+    container_name: ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=5m
+      - OLLAMA_MAX_VRAM=${OLLAMA_MAX_VRAM}
+      - OLLAMA_FLASH_ATTENTION=1
+      - OLLAMA_KV_CACHE_TYPE=q4_0
+      - OLLAMA_MAX_MODELS=2
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_MAX_QUEUE=512
+    volumes:
+      - 'ollama_data:/root/.ollama'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    networks:
+      - web_proxy
+      - default
+    healthcheck:
+      test: [ "CMD", "ollama", "list" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  open-webui:
+    <<: *common-keys
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    ports:
+      - 3000:8080
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - ENABLE_WEB_SEARCH=true
+      - WEB_SEARCH_ENGINE=searxng
+      - SEARXNG_QUERY_URL=http://searxng:8080/search?q=<query>
+      - WEB_SEARCH_RESULT_COUNT=5
+      - BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL=true
+      - ENABLE_OTEL=true
+      - ENABLE_OTEL_TRACES=true
+      - ENABLE_OTEL_METRICS=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+      - OTEL_SERVICE_NAME=open-webui
+    volumes:
+      - '${SPEED_DRIVE}/open-webui/data:/app/backend/data'
+    networks:
+      - web_proxy
+      - default
+    depends_on:
+      - ollama
+      - otel-collector
+      - searxng
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:8080/ || exit 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  searxng:
+    <<: *common-keys
+    image: searxng/searxng:latest
+    container_name: searxng
+    ports:
+      - 8084:8080
+    volumes:
+      - '${SPEED_DRIVE}/searxng:/etc/searxng'
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - default
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --spider --quiet http://localhost:8080/ || exit 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  pydantic-api:
+    <<: *common-keys
+    build:
+      context: ./pydantic-api
+      dockerfile: Dockerfile
+    container_name: pydantic-api
+    ports:
+      - 8000:8000
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434/v1
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    volumes:
+      - 'C:/Docker Speed Drive/Docker Stacks/Minecraft Stack:/minecraft_stack'
+      - 'C:/Docker Speed Drive/Study Journal:/study-journal'
+      - 'C:/Docker Speed Drive/Knowledge Vault:/knowledge-vault:ro'
+    networks:
+      - web_proxy
+      - default
+    healthcheck:
+      test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  qdrant:
+    <<: *common-keys
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - 6333:6333
+      - 6334:6334
+    environment:
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
+    volumes:
+      - '${SPEED_DRIVE}/qdrant/data:/qdrant/storage'
+    networks:
+      - web_proxy
+      - default
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  promptfoo:
+    <<: *common-keys
+    image: ghcr.io/promptfoo/promptfoo:latest
+    container_name: promptfoo
+    ports:
+      - 3005:3000
+    environment:
+      - PROMPTFOO_CONFIG_DIR=/home/promptfoo/.promptfoo
+      - OLLAMA_BASE_URL=http://ollama:11434
+    volumes:
+      - '${SPEED_DRIVE}/promptfoo/data:/home/promptfoo/.promptfoo'
+      - 'C:/Docker Speed Drive/Docker Stacks/AI Stack/promptfooconfig.yaml:/app/promptfooconfig.yaml'
+      - 'C:/Docker Speed Drive/Docker Stacks/AI Stack/ollama-provider.js:/app/ollama-provider.js'
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - default
+    depends_on:
+      - ollama
+
+  unsloth:
+    <<: *common-keys
+    image: unsloth/unsloth:latest
+    container_name: unsloth
+    ports:
+      - 8890:8888
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    volumes:
+      - '${SPEED_DRIVE}/unsloth/data:/workspace'
+    networks:
+      - default
+    command: ["jupyter", "notebook", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", "--NotebookApp.token=atlas"]
+
+  otel-collector:
+    <<: *common-keys
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-collector
+    volumes:
+      - 'C:/Docker Speed Drive/Docker Stacks/AI Stack/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml'
+    ports:
+      - 4317:4317
+      - 8889:8889
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - web_proxy
+      - default
+    healthcheck:
+      test: [ "CMD", "/otelcol-contrib", "components" ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+networks:
+  web_proxy:
+    external: true
+
+volumes:
+  ollama_data:

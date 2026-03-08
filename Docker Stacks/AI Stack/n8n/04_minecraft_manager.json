@@ -1,0 +1,242 @@
+{
+    "name": "04_minecraft_manager",
+    "nodes": [
+        {
+            "parameters": {
+                "path": "minecraft-control",
+                "responseMode": "lastNode",
+                "options": {}
+            },
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [
+                0,
+                0
+            ],
+            "id": "webhook-trigger",
+            "name": "Webhook"
+        },
+        {
+            "parameters": {
+                "dataType": "string",
+                "value1": "={{ $json.body.command }}",
+                "rules": {
+                    "rules": [
+                        {
+                            "value2": "restart",
+                            "output": 0
+                        },
+                        {
+                            "value2": "backup",
+                            "output": 1
+                        },
+                        {
+                            "value2": "status",
+                            "output": 2
+                        },
+                        {
+                            "value2": "update",
+                            "output": 3
+                        }
+                    ]
+                }
+            },
+            "type": "n8n-nodes-base.switch",
+            "typeVersion": 3,
+            "position": [
+                250,
+                0
+            ],
+            "id": "action-router",
+            "name": "Action Router"
+        },
+        {
+            "parameters": {
+                "command": "docker restart minecraft"
+            },
+            "type": "n8n-nodes-base.ssh",
+            "typeVersion": 1,
+            "position": [
+                550,
+                -200
+            ],
+            "id": "ssh-restart",
+            "name": "Restart Server",
+            "credentials": {
+                "sshPrivatekeyApi": {
+                    "id": "ssh-host-key",
+                    "name": "Host SSH"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "command": "cd 'C:\\Docker Speed Drive\\Docker Stacks\\Minecraft Stack' && tar -czvf backups/backup_$(date +%F_%H-%M).tar.gz data"
+            },
+            "type": "n8n-nodes-base.ssh",
+            "typeVersion": 1,
+            "position": [
+                550,
+                0
+            ],
+            "id": "ssh-backup",
+            "name": "Backup Data",
+            "credentials": {
+                "sshPrivatekeyApi": {
+                    "id": "ssh-host-key",
+                    "name": "Host SSH"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "command": "docker ps --filter name=minecraft --format \"{{.Status}}\""
+            },
+            "type": "n8n-nodes-base.ssh",
+            "typeVersion": 1,
+            "position": [
+                550,
+                200
+            ],
+            "id": "ssh-status",
+            "name": "Get Status",
+            "credentials": {
+                "sshPrivatekeyApi": {
+                    "id": "ssh-host-key",
+                    "name": "Host SSH"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "values": {
+                    "string": [
+                        {
+                            "name": "text",
+                            "value": "✅ **Server Restarting**... Please wait 60 seconds."
+                        }
+                    ]
+                }
+            },
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 2,
+            "position": [
+                800,
+                -200
+            ],
+            "id": "msg-restart",
+            "name": "Msg Restart"
+        },
+        {
+            "parameters": {
+                "values": {
+                    "string": [
+                        {
+                            "name": "text",
+                            "value": "💾 **Backup Created** at `C:\\Docker Speed Drive\\Docker Stacks\\Minecraft Stack\\backups`"
+                        }
+                    ]
+                }
+            },
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 2,
+            "position": [
+                800,
+                0
+            ],
+            "id": "msg-backup",
+            "name": "Msg Backup"
+        },
+        {
+            "parameters": {
+                "values": {
+                    "string": [
+                        {
+                            "name": "text",
+                            "value": "📊 **Server Status**: {{ $json.stdout }}"
+                        }
+                    ]
+                }
+            },
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 2,
+            "position": [
+                800,
+                200
+            ],
+            "id": "msg-status",
+            "name": "Msg Status"
+        }
+    ],
+    "connections": {
+        "Webhook": {
+            "main": [
+                [
+                    {
+                        "node": "Action Router",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Action Router": {
+            "main": [
+                [
+                    {
+                        "node": "Restart Server",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Backup Data",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Get Status",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Restart Server": {
+            "main": [
+                [
+                    {
+                        "node": "Msg Restart",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Backup Data": {
+            "main": [
+                [
+                    {
+                        "node": "Msg Backup",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Status": {
+            "main": [
+                [
+                    {
+                        "node": "Msg Status",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    }
+}

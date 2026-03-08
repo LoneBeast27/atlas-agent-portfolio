@@ -1,0 +1,113 @@
+{
+    "name": "Master Control Bot v4 (Fixed)",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "docker-control",
+                "responseMode": "responseNode",
+                "options": {}
+            },
+            "id": "webhook_trigger",
+            "name": "AI Webhook",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [
+                380,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "command": "docker ps --format \"table {{.Names}}\\t{{.Status}}\\t{{.State}}\"",
+                "cwd": "."
+            },
+            "id": "ssh_docker_ps",
+            "name": "SSH Docker Check",
+            "type": "n8n-nodes-base.ssh",
+            "typeVersion": 1,
+            "position": [
+                600,
+                100
+            ],
+            "credentials": {
+                "sshPrivateKey": {
+                    "id": "IOkLyKN6qxpzPHdf",
+                    "name": "Ultimus SSH"
+                }
+            },
+            "continueOnFail": true
+        },
+        {
+            "parameters": {
+                "values": {
+                    "string": [
+                        {
+                            "name": "text",
+                            "value": "={{ $json.error ? '[ERROR] SSH Failed: ' + $json.error.message : '[Docker] **Docker Status**\\nStart Time: ' + $now + '\\n\\n' + $json.stdout }}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "format_ai_response",
+            "name": "Format AI Response",
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 2,
+            "position": [
+                820,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "respondWith": "json",
+                "responseBody": "={{ $json }}",
+                "options": {}
+            },
+            "id": "respond_to_webhook",
+            "name": "Respond to Webhook",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1,
+            "position": [
+                1040,
+                100
+            ]
+        }
+    ],
+    "connections": {
+        "AI Webhook": {
+            "main": [
+                [
+                    {
+                        "node": "SSH Docker Check",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "SSH Docker Check": {
+            "main": [
+                [
+                    {
+                        "node": "Format AI Response",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Format AI Response": {
+            "main": [
+                [
+                    {
+                        "node": "Respond to Webhook",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    }
+}
