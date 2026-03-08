@@ -1,30 +1,30 @@
 # Atlas Agent
 
-A production-grade, multi-stack Docker infrastructure platform running 30+ containers across 7 orchestrated stacks on a single host. Built for AI inference, media streaming, game server hosting, workflow automation, observability, and real-time infrastructure monitoring.
+A production-grade, multi-stack Docker infrastructure platform running 30+ containers across 6 orchestrated stacks on a single host. Built for AI inference, game server hosting, workflow automation, observability, and real-time infrastructure monitoring.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Nginx Proxy Manager (SSL)                     │
-│                    Cloudflare DNS / Zero Trust                   │
-├─────────┬──────────┬──────────┬──────────┬──────────┬───────────┤
-│ AI Stack│ Ops Stack│Fund Stack│Game Stack│ MC Stack │Media Stack│
-│         │          │          │          │          │           │
-│ Ollama  │Prometheus│   NPM    │Pterodact.│Minecraft │ Jellyfin  │
-│ OpenWebUI│ Grafana │  Komodo  │  Wings   │  Server  │ Navidrome │
-│  n8n    │ cAdvisor │  DDNS    │ MariaDB  │          │  Feishin  │
-│ Qdrant  │ NodeExp  │  Mongo   │  Redis   │          │  Beets    │
-│Pydantic │ Uptime-K │          │          │          │  JFA-Go   │
-│Promptfoo│Watchtower│          │          │          │           │
-│ Unsloth │ Homepage │          │          │          │           │
-│  OTEL   │          │          │          │          │           │
-│ SearXNG │          │          │          │          │           │
-│Postgres │          │          │          │          │           │
-├─────────┴──────────┴──────────┴──────────┴──────────┴───────────┤
-│              Last Resort Hub (Real-Time Dashboard)               │
-│          SpacetimeDB + Bun/Hono Gateway + React 19               │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│               Nginx Proxy Manager (SSL)               │
+│               Cloudflare DNS / Zero Trust              │
+├─────────┬──────────┬──────────┬──────────┬──────────┤
+│ AI Stack│ Ops Stack│Fund Stack│Game Stack│ MC Stack │
+│         │          │          │          │          │
+│ Ollama  │Prometheus│   NPM    │Pterodact.│Minecraft │
+│ OpenWebUI│ Grafana │  Komodo  │  Wings   │  Server  │
+│  n8n    │ cAdvisor │  DDNS    │ MariaDB  │          │
+│ Qdrant  │ NodeExp  │  Mongo   │  Redis   │          │
+│Pydantic │ Uptime-K │          │          │          │
+│Promptfoo│Watchtower│          │          │          │
+│ Unsloth │ Homepage │          │          │          │
+│  OTEL   │          │          │          │          │
+│ SearXNG │          │          │          │          │
+│Postgres │          │          │          │          │
+├─────────┴──────────┴──────────┴──────────┴──────────┤
+│         Last Resort Hub (Real-Time Dashboard)          │
+│     SpacetimeDB + Bun/Hono Gateway + React 19          │
+└──────────────────────────────────────────────────────┘
 ```
 
 ## Key Features
@@ -70,7 +70,6 @@ A production-grade, multi-stack Docker infrastructure platform running 30+ conta
 | **Frontend** | React 19, Vite 7, Tailwind CSS 4, react-grid-layout |
 | **Databases** | PostgreSQL, MongoDB, MariaDB, Redis, SpacetimeDB, Qdrant |
 | **Monitoring** | Prometheus, Grafana, cAdvisor, Node Exporter, Uptime Kuma |
-| **Media** | Jellyfin (GPU NVENC), Navidrome, Feishin |
 | **Gaming** | Pterodactyl Panel + Wings, itzg/minecraft-server |
 
 ## Hardware
@@ -95,8 +94,7 @@ A production-grade, multi-stack Docker infrastructure platform running 30+ conta
 
    # Then application stacks
    docker compose -f "Docker Stacks/AI Stack/docker-compose.yml" up -d
-   docker compose -f "Docker Stacks/Media Stack/docker-compose.yml" up -d
-   docker compose -f "Docker Stacks/Game Stack/docker-compose.yml" up -d
+docker compose -f "Docker Stacks/Game Stack/docker-compose.yml" up -d
    docker compose -f "Docker Stacks/Minecraft Stack/docker-compose.yml" up -d
 
    # Dashboard last (depends on other stacks)
@@ -113,7 +111,6 @@ atlas-agent-portfolio/
 │   ├── Ops Stack/          # Monitoring, dashboards, auto-updates
 │   ├── Game Stack/         # Pterodactyl game server management
 │   ├── Minecraft Stack/    # Modded MC server with self-healing
-│   ├── Media Stack/        # Jellyfin, Navidrome, music tools
 │   └── last-resort-hub/    # Real-time operations dashboard
 │       ├── api-gateway/    # Bun + Hono REST aggregator
 │       ├── stdb-backend/   # SpacetimeDB schema + reducers
