@@ -120,6 +120,10 @@ atlas-agent-portfolio/
 └── README.md
 ```
 
+## Note
+
+This repository is a curated subset of the full homelab infrastructure. The production environment runs additional stacks and services not included here. What you see represents the core architecture — the actual system is broader.
+
 ## License
 
 MIT
