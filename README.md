@@ -53,7 +53,7 @@ A production-grade, multi-stack Docker infrastructure platform running 35+ conta
 ### Observability Stack
 - Prometheus + Grafana deployed for metrics collection and visualization
 - cAdvisor (container metrics) + Node Exporter (host OS)
-- OpenTelemetry collector ingesting traces from AI workloads
+- OpenTelemetry collector deployed for AI workload tracing
 - Uptime Kuma for independent service health checks
 
 ### Game Server Network
@@ -127,6 +127,7 @@ atlas-agent-portfolio/
 - **Last Resort Hub redesign** — rebuilding the real-time dashboard with a refined component architecture and expanded widget system
 - **RAG fine-tuning pipeline** — collecting structured error/resolution data from production incidents to fine-tune a domain-specific model for infrastructure troubleshooting
 - **Observability buildout** — custom Grafana dashboards, Prometheus alerting rules, and GPU metrics integration
+- **OTEL trace integration** — wiring OpenTelemetry trace data into the RAG pipeline for context-aware infrastructure debugging
 
 ## Note
 
