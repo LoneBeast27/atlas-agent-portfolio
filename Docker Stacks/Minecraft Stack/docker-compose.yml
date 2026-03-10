@@ -3,20 +3,110 @@ x-common-keys: &common-keys
   logging:
     driver: json-file
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  Velocity Network — Multi-server Minecraft infrastructure
+#
+#  In production, backend servers (hub, survival, creative)
+#  are managed by Pterodactyl Panel + Wings as Docker sibling
+#  containers. This compose represents the network architecture.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 services:
-  mc:
+  # ── Velocity Proxy ───────────────────────────────────
+  # Routes players to backend servers, handles authentication
+  velocity:
     <<: *common-keys
-    container_name: minecraft-server
+    container_name: velocity-proxy
+    image: itzg/bungeecord:latest
+    ports:
+      - 25565:25577
+    environment:
+      TYPE: VELOCITY
+      MEMORY: 512M
+    volumes:
+      - ./data/velocity:/server
+    healthcheck:
+      test: mc-health
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ── Hub Server ───────────────────────────────────────
+  # Spawn point — flat world, adventure mode, server selector
+  hub:
+    <<: *common-keys
+    container_name: mc-hub
     image: itzg/minecraft-server:java21
     ports:
-      - 25565:25565
-    stdin_open: true
-    tty: true
+      - 25566:25565
+    environment:
+      EULA: "TRUE"
+      TYPE: PAPER
+      VERSION: "1.21.1"
+      MEMORY: 2G
+      ONLINE_MODE: "FALSE"        # Velocity handles auth
+      VIEW_DISTANCE: 6
+    volumes:
+      - ./data/hub:/data
+    healthcheck:
+      test: mc-health
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+
+  # ── Survival Server ─────────────────────────────────
+  # Permanent world — Fabric with mods, never resets
+  survival:
+    <<: *common-keys
+    container_name: mc-survival
+    image: itzg/minecraft-server:java21
+    ports:
+      - 25567:25565
+    environment:
+      EULA: "TRUE"
+      TYPE: FABRIC
+      VERSION: "1.21.1"
+      MEMORY: 6G
+      ONLINE_MODE: "FALSE"
+      VIEW_DISTANCE: 8
+      MAX_TICK_TIME: "60000"
+      ENABLE_ROLLING_LOGS: "TRUE"
+    volumes:
+      - ./data/survival:/data
+    healthcheck:
+      test: mc-health
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+
+  # ── Modded Server (ATM10) ───────────────────────────
+  # Heavy modpack — All The Mods 10 via CurseForge
+  modded:
+    <<: *common-keys
+    container_name: mc-modded
+    image: itzg/minecraft-server:java21
+    ports:
+      - 25568:25565
     environment:
       EULA: "TRUE"
       TYPE: AUTO_CURSEFORGE
       CF_SLUG: all-the-mods-10
-      CF_API_KEY: "$$2a$$10$$UONaq105tBTyJZCW13y3WOJPKbCz8l8jbXCF2.0JGlv6OGLGwBXCy"
+      CF_API_KEY: ${CF_API_KEY}
       MEMORY: 16G
       VIEW_DISTANCE: 8
       MAX_TICK_TIME: "60000"
@@ -30,7 +120,7 @@ services:
         -XX:MaxGCPauseMillis=50
         -XX:G1HeapRegionSize=32M
     volumes:
-      - "c:/Docker Speed Drive/Docker Stacks/Minecraft Stack/data:/data"
+      - ./data/modded:/data
     healthcheck:
       test: mc-health
       interval: 30s
@@ -41,3 +131,8 @@ services:
       resources:
         limits:
           memory: 20G
+
+  # ── Creative Worlds ─────────────────────────────────
+  # On-demand per-player worlds, created via n8n webhook
+  # orchestration. Ports 25570-25579 (10 slots).
+  # Managed dynamically by Pterodactyl — not defined here.
