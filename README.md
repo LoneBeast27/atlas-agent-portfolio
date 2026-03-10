@@ -120,6 +120,11 @@ atlas-agent-portfolio/
 └── README.md
 ```
 
+## In Progress
+
+- **Last Resort Hub redesign** — rebuilding the real-time dashboard with a refined component architecture and expanded widget system
+- **RAG fine-tuning pipeline** — collecting structured error/resolution data from production incidents to fine-tune a domain-specific model for infrastructure troubleshooting
+
 ## Note
 
 This repository is a curated subset of the full homelab infrastructure. The production environment runs additional stacks and services not included here. What you see represents the core architecture — the actual system is broader.
