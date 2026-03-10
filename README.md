@@ -34,8 +34,10 @@ A production-grade, multi-stack Docker infrastructure platform running 35+ conta
 - **Quantized KV cache** (q4_0) + flash attention for VRAM efficiency
 - **RAG pipeline**: Qdrant vector DB with curated knowledge + dynamic model inventory
 - **AI agent tool use**: FastAPI endpoints expose structured tools that LLMs invoke via function calling
-- **LLM evaluation**: Promptfoo benchmarking with 20 test cases, 100% baseline accuracy
-- **Fine-tuning**: Unsloth + Jupyter environment with full GPU access
+- **LLM evaluation**: Promptfoo benchmarking with 20 test cases, 100% baseline accuracy*
+- **Fine-tuning environment**: Unsloth + Jupyter with full GPU access — awaiting more production error data before first training run
+
+*\*Baseline against current test suite; subject to revision as edge cases and real-world failures surface.*
 
 ### Self-Healing Infrastructure
 - n8n workflow monitors Docker health every 5 minutes
